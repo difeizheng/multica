@@ -259,6 +259,7 @@
     "webhook_created_warning": "请把该 URL 当作密码对待，任何拿到它的人都能触发该 Autopilot。",
     "webhook_created_done": "完成",
     "event_filter_label": "事件过滤",
+    "event_filter_docs_link_label": "了解事件过滤的工作方式",
     "event_filter_event_placeholder": "例如 workflow_run",
     "event_filter_actions_placeholder": "completed, failed",
     "event_filter_hint": "只处理匹配这些事件的 webhook。留空则接受所有事件。",

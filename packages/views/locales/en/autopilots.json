@@ -259,6 +259,7 @@
     "webhook_created_warning": "Treat this URL like a password. Anyone who has it can trigger the autopilot.",
     "webhook_created_done": "Done",
     "event_filter_label": "Event filters",
+    "event_filter_docs_link_label": "Learn how event filters work",
     "event_filter_event_placeholder": "e.g. workflow_run",
     "event_filter_actions_placeholder": "completed, failed",
     "event_filter_hint": "Only process webhooks matching these events. Leave empty to accept all.",

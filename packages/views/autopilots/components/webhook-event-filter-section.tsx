@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { X, Plus, Filter } from "lucide-react";
+import { X, Plus, Filter, ExternalLink } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import type { WebhookEventFilter } from "@multica/core/types";
 import { useT } from "../../i18n";
@@ -15,9 +15,12 @@ export function WebhookEventFilterSection({
   filters,
   onChange,
 }: WebhookEventFilterSectionProps) {
-  const { t } = useT("autopilots");
+  const { t, i18n } = useT("autopilots");
   const [newEvent, setNewEvent] = useState("");
   const [newActions, setNewActions] = useState("");
+  const docsHref = i18n.language?.startsWith("zh")
+    ? `https://multica.ai/docs/zh/autopilots#${encodeURIComponent("事件过滤")}`
+    : "https://multica.ai/docs/autopilots#event-filters";
 
   const addFilter = () => {
     const event = newEvent.trim();
@@ -42,6 +45,16 @@ export function WebhookEventFilterSection({
       <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
         <Filter className="size-3" />
         {t(($) => $.dialog.event_filter_label)}
+        <a
+          href={docsHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={t(($) => $.dialog.event_filter_docs_link_label)}
+          title={t(($) => $.dialog.event_filter_docs_link_label)}
+          className="ml-0.5 inline-flex items-center text-muted-foreground/80 hover:text-foreground transition-colors"
+        >
+          <ExternalLink className="size-3" />
+        </a>
       </div>
 
       {filters.length > 0 && (
