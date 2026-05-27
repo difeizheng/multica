@@ -60,6 +60,38 @@ func TestBuildIssueDescription_UsesTriggerTimezone(t *testing.T) {
 	}
 }
 
+// An invalid IANA timezone string must fall back to UTC instead of leaving the
+// timestamp half-formatted in the issue body.
+func TestBuildIssueDescription_InvalidTriggerTimezoneFallsBackToUTC(t *testing.T) {
+	s := &AutopilotService{}
+	ap := db.Autopilot{Description: pgtype.Text{String: "do the thing", Valid: true}}
+	run := db.AutopilotRun{
+		Source:      "schedule",
+		TriggeredAt: pgtype.Timestamptz{Time: time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC), Valid: true},
+	}
+
+	got := s.buildIssueDescription(ap, run, "Foo/Bar")
+	if !strings.Contains(got.String, "Autopilot run triggered at 2026-05-26 00:00 UTC") {
+		t.Fatalf("invalid trigger timezone should fall back to UTC: %q", got.String)
+	}
+}
+
+func TestInterpolateTemplate_InvalidTriggerTimezoneFallsBackToUTC(t *testing.T) {
+	s := &AutopilotService{}
+	ap := db.Autopilot{
+		Title:              "fallback",
+		IssueTitleTemplate: pgtype.Text{String: "report {{date}}", Valid: true},
+	}
+	run := db.AutopilotRun{
+		TriggeredAt: pgtype.Timestamptz{Time: time.Date(2026, 5, 26, 23, 30, 0, 0, time.UTC), Valid: true},
+	}
+
+	got := s.interpolateTemplate(ap, run, "Foo/Bar")
+	if want := "report 2026-05-26"; got != want {
+		t.Fatalf("interpolateTemplate = %q, want %q", got, want)
+	}
+}
+
 func TestBuildIssueDescription_WithWebhookPayload(t *testing.T) {
 	s := &AutopilotService{}
 	ap := db.Autopilot{Description: pgtype.Text{String: "watch PRs", Valid: true}}

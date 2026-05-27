@@ -31,7 +31,11 @@ type AutopilotService struct {
 	TaskSvc   *TaskService
 }
 
-const defaultAutopilotTriggerTimezone = "UTC"
+// DefaultAutopilotTriggerTimezone is the timezone used to render Autopilot
+// trigger output when a trigger has no configured timezone or the configured
+// timezone fails to load. Exported so the scheduler can use the same default
+// when computing next run times.
+const DefaultAutopilotTriggerTimezone = "UTC"
 
 func NewAutopilotService(q *db.Queries, tx TxStarter, bus *events.Bus, taskSvc *TaskService) *AutopilotService {
 	return &AutopilotService{Queries: q, TxStarter: tx, Bus: bus, TaskSvc: taskSvc}
@@ -843,7 +847,7 @@ func autopilotRunDurationMS(run db.AutopilotRun) int64 {
 
 func (s *AutopilotService) resolveAutopilotTriggerTimezone(ctx context.Context, triggerID pgtype.UUID) string {
 	if !triggerID.Valid || s == nil || s.Queries == nil {
-		return defaultAutopilotTriggerTimezone
+		return DefaultAutopilotTriggerTimezone
 	}
 
 	trigger, err := s.Queries.GetAutopilotTrigger(ctx, triggerID)
@@ -852,12 +856,12 @@ func (s *AutopilotService) resolveAutopilotTriggerTimezone(ctx context.Context, 
 			"trigger_id", util.UUIDToString(triggerID),
 			"error", err,
 		)
-		return defaultAutopilotTriggerTimezone
+		return DefaultAutopilotTriggerTimezone
 	}
 
 	timezone := strings.TrimSpace(trigger.Timezone.String)
 	if !trigger.Timezone.Valid || timezone == "" {
-		return defaultAutopilotTriggerTimezone
+		return DefaultAutopilotTriggerTimezone
 	}
 	if _, err := time.LoadLocation(timezone); err != nil {
 		slog.Warn("invalid autopilot trigger timezone; falling back to UTC",
@@ -865,7 +869,7 @@ func (s *AutopilotService) resolveAutopilotTriggerTimezone(ctx context.Context, 
 			"timezone", timezone,
 			"error", err,
 		)
-		return defaultAutopilotTriggerTimezone
+		return DefaultAutopilotTriggerTimezone
 	}
 	return timezone
 }
@@ -895,11 +899,11 @@ func autopilotRunTriggeredAt(run db.AutopilotRun) time.Time {
 func autopilotTriggerLocation(timezone string) (*time.Location, string) {
 	label := strings.TrimSpace(timezone)
 	if label == "" {
-		label = defaultAutopilotTriggerTimezone
+		label = DefaultAutopilotTriggerTimezone
 	}
 	loc, err := time.LoadLocation(label)
 	if err != nil {
-		return time.UTC, defaultAutopilotTriggerTimezone
+		return time.UTC, DefaultAutopilotTriggerTimezone
 	}
 	return loc, label
 }
