@@ -417,12 +417,29 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 		"PATH=/usr/bin",
 		"CLAUDECODE=1",
 		"CLAUDE_CODE_ENTRYPOINT=cli",
+		"CLAUDE_CODE_EXECPATH=/opt/claude",
+		"CLAUDE_CODE_SESSION_ID=abc123",
+		"CLAUDE_CODE_SSE_PORT=9999",
 		"CLAUDECODEX=keep-me",
+		"CLAUDE_CODE_GIT_BASH_PATH=C:\\Program Files\\Git\\bin\\bash.exe",
+		"CLAUDE_CODE_USE_BEDROCK=1",
+		"CLAUDE_CODE_TMPDIR=/custom/tmp",
 	}, map[string]string{"FOO": "bar"})
 
+	// Internal runtime/session markers must be stripped so the child does not
+	// inherit the parent's identity or transport.
+	filteredOut := []string{
+		"CLAUDECODE=1",
+		"CLAUDE_CODE_ENTRYPOINT=cli",
+		"CLAUDE_CODE_EXECPATH=/opt/claude",
+		"CLAUDE_CODE_SESSION_ID=abc123",
+		"CLAUDE_CODE_SSE_PORT=9999",
+	}
 	for _, entry := range env {
-		if entry == "CLAUDECODE=1" || entry == "CLAUDE_CODE_ENTRYPOINT=cli" {
-			t.Fatalf("expected CLAUDECODE vars to be filtered, got %v", env)
+		for _, banned := range filteredOut {
+			if entry == banned {
+				t.Fatalf("expected internal Claude Code marker %q to be filtered, got %v", banned, env)
+			}
 		}
 	}
 
@@ -436,6 +453,19 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 	}
 	if !found["CLAUDECODEX=keep-me"] {
 		t.Fatalf("expected unrelated env vars to be preserved, got %v", env)
+	}
+	// User-facing CLAUDE_CODE_* config must reach the child — stripping
+	// CLAUDE_CODE_GIT_BASH_PATH is what broke Claude Code on Windows (#3671).
+	if !found["CLAUDE_CODE_GIT_BASH_PATH=C:\\Program Files\\Git\\bin\\bash.exe"] {
+		t.Fatalf("expected CLAUDE_CODE_GIT_BASH_PATH to be preserved, got %v", env)
+	}
+	if !found["CLAUDE_CODE_USE_BEDROCK=1"] {
+		t.Fatalf("expected CLAUDE_CODE_USE_BEDROCK to be preserved, got %v", env)
+	}
+	// CLAUDE_CODE_TMPDIR is a documented user-configurable temp-dir override, not
+	// an internal per-session marker, so it must reach the child.
+	if !found["CLAUDE_CODE_TMPDIR=/custom/tmp"] {
+		t.Fatalf("expected CLAUDE_CODE_TMPDIR to be preserved, got %v", env)
 	}
 	if !found["FOO=bar"] {
 		t.Fatalf("expected extra env var to be appended, got %v", env)
