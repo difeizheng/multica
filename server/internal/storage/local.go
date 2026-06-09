@@ -156,42 +156,12 @@ func (s *LocalStorage) GetFilePath(key string) string {
 	return filepath.Join(s.uploadDir, key)
 }
 
-// servedUploadCSP is the per-response CSP override for /uploads/*.
-//
-// The application-wide CSP from middleware.ContentSecurityPolicy is
-// designed for the application origin (script-src 'self', style-src
-// allowlist, etc.). Uploads, however, are user-supplied content that
-// happens to be served from the same origin in the local-storage
-// deployment. A tight per-response CSP overrides the global one for
-// these responses so that even if a browser were coaxed into
-// rendering an upload as a document (via attempted MIME confusion,
-// content-type override, or future regression), the document cannot
-// run scripts, load remote resources, or be framed.
-//
-// `default-src 'none'` blocks every fetch directive, `sandbox`
-// strips origin privileges (no cookies, no DOM access for embedders),
-// and `frame-ancestors 'none'` makes the response unframable as a
-// belt-and-suspenders against clickjacking-style chains.
-const servedUploadCSP = "default-src 'none'; sandbox; frame-ancestors 'none'"
-
 func (s *LocalStorage) ServeFile(w http.ResponseWriter, r *http.Request, filename string) {
 	// The sidecar is an implementation detail of the local backend; refuse
 	// to serve it directly so /uploads/<key>.meta.json doesn't become a
 	// stable read API. Comes before any disk work so a path-traversal
 	// attempt at a .meta.json sibling can't trigger an out-of-tree read.
 	if strings.HasSuffix(filename, metaSuffix) {
-		http.NotFound(w, r)
-		return
-	}
-
-	// Reject anything that would resolve to a directory listing. The
-	// disclosure recommendation is explicit: even with UUID filenames,
-	// enumerating every upload in a workspace ("/uploads/workspaces/{ws}/")
-	// shouldn't be free. http.ServeFile would happily render such a
-	// request as an HTML index when no index.html is present, so we cut
-	// it off before the disk hit. An empty filename ("/uploads/") and a
-	// trailing slash both indicate a directory request from the client.
-	if filename == "" || strings.HasSuffix(filename, "/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -206,28 +176,7 @@ func (s *LocalStorage) ServeFile(w http.ResponseWriter, r *http.Request, filenam
 		http.NotFound(w, r)
 		return
 	}
-	// Stat the resolved path so we can refuse directories explicitly.
-	// http.ServeFile would render an HTML index for a directory hit; this
-	// guard runs first so the index is never generated.
-	if info, err := os.Stat(filePath); err == nil && info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
 	slog.Info("serving file", "filename", filename, "filepath", filePath)
-
-	// Hardening headers applied to every successful upload response:
-	//   - X-Content-Type-Options: nosniff
-	//     Locks the browser to the Content-Type we declare, so an
-	//     uploaded .txt cannot be re-interpreted as a script via
-	//     content-type sniffing.
-	//   - Content-Security-Policy: tight per-response policy
-	//     (default-src 'none'; sandbox; frame-ancestors 'none').
-	//     Belt-and-suspenders defense if a future regression in the
-	//     Content-Disposition: attachment path lets a browser render
-	//     an upload as a document — the document still cannot
-	//     execute scripts or load anything cross-origin.
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", servedUploadCSP)
 
 	// Mirror the S3 Upload path: when sidecar metadata exists for this key,
 	// set Content-Disposition with the original uploaded filename. Without

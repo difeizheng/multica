@@ -15,7 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/storage"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -29,67 +28,6 @@ var extContentTypes = map[string]string{
 	".mjs":  "application/javascript",
 	".json": "application/json",
 	".wasm": "application/wasm",
-}
-
-// uploadDeniedExtensions are file types the upload endpoint rejects outright.
-//
-// The defense is layered: the SVG-XSS chain documented in the
-// security-findings-2026-06-02 disclosure is already broken by the
-// Content-Disposition: attachment fix shipped in PR #3023 — every entry
-// here would be served as an attachment download anyway, never inline.
-// We still reject these at the upload edge because:
-//
-//   - HTML-family content has no legitimate use case as an issue
-//     attachment in this product (no rich-text export targets it),
-//     yet it is the highest-leverage primitive an attacker would
-//     reach for if a future regression weakens the disposition path.
-//   - Rejecting at upload time gives operators a clean, auditable
-//     "we don't accept this" signal in the request log instead of
-//     silently storing the bytes and relying on the serve path to
-//     stay safe forever.
-//
-// We intentionally do NOT reject .js / .svg here. Source-code
-// attachments preview as text/plain via /api/attachments/{id}/content
-// (see isTextPreviewable), and SVG logos / diagrams remain a common
-// legitimate upload — the existing SVG fix neutralizes them. Adding
-// either to this list would break those flows without adding meaningful
-// security on top of the disposition fix.
-var uploadDeniedExtensions = map[string]struct{}{
-	".html":  {},
-	".htm":   {},
-	".xhtml": {},
-	".shtml": {},
-	".xht":   {},
-	".phtml": {},
-}
-
-// uploadDeniedContentTypes mirrors uploadDeniedExtensions for the cases
-// where the extension is benign but the sniffed media type is not. Keeping
-// both gates means a renamed payload (logo.png that sniffs as text/html)
-// is still refused.
-var uploadDeniedContentTypes = map[string]struct{}{
-	"text/html":             {},
-	"application/xhtml+xml": {},
-}
-
-// isUploadDenied reports whether a multipart upload should be rejected based
-// on its filename extension or sniffed content type. Both gates are checked
-// because either alone is bypassable (rename a .html to .png and the
-// extension passes; ship literal HTML in a .png and the sniffer catches it).
-func isUploadDenied(filename, contentType string) bool {
-	ext := strings.ToLower(path.Ext(filename))
-	if _, denied := uploadDeniedExtensions[ext]; denied {
-		return true
-	}
-	// Strip parameters (e.g. "text/html; charset=utf-8") before lookup.
-	mediaType := strings.ToLower(strings.TrimSpace(contentType))
-	if i := strings.IndexByte(mediaType, ';'); i >= 0 {
-		mediaType = strings.TrimSpace(mediaType[:i])
-	}
-	if _, denied := uploadDeniedContentTypes[mediaType]; denied {
-		return true
-	}
-	return false
 }
 
 const maxUploadSize = 100 << 20 // 100 MB
@@ -148,27 +86,6 @@ func (h *Handler) attachmentToResponse(a db.Attachment) AttachmentResponse {
 	}
 	if h.CFSigner != nil {
 		resp.DownloadURL = h.CFSigner.SignedURL(a.Url, time.Now().Add(h.attachmentDownloadURLTTL()))
-	}
-	// LocalStorage backend: append HMAC signed-query params so the URL is
-	// directly fetchable by native <img>/<video>/<iframe> resource loads
-	// from token-auth clients (Desktop, legacy-token Web, mobile). After
-	// MUL-3132 hardened /uploads/* with middleware.Auth, those clients
-	// would otherwise see 401 on inline image rendering — they cannot
-	// attach Authorization headers to native resource loads. We sign
-	// over the storage key (not the URL host) so the value matches what
-	// ServeLocalUpload re-derives from the request path. TTL mirrors
-	// CloudFront mode (defaultAttachmentDownloadURLTTL = 30 min).
-	if local, ok := h.Storage.(*storage.LocalStorage); ok {
-		key := local.KeyFromURL(a.Url)
-		expiry := time.Now().Add(h.attachmentDownloadURLTTL())
-		signed := storage.SignLocalUploadURL(a.Url, key, auth.JWTSecret(), expiry)
-		resp.URL = signed
-		// /api/attachments/{id}/download still goes through the
-		// authenticated proxy path, so we don't sign DownloadURL —
-		// it requires Bearer/cookie like every other JSON API
-		// endpoint. The signed URL above is what unblocks resource
-		// loads; explicit downloads still use the authenticated
-		// route.
 	}
 	if a.IssueID.Valid {
 		s := uuidToString(a.IssueID)
@@ -309,18 +226,6 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 	// Override with extension-based type when the sniffer gets it wrong.
 	if ct, ok := extContentTypes[strings.ToLower(path.Ext(header.Filename))]; ok {
 		contentType = ct
-	}
-
-	// Reject HTML-family uploads at the edge. The existing
-	// Content-Disposition: attachment fix already prevents these from
-	// rendering as documents, but there's no legitimate use for an
-	// uploaded .html as an attachment in this product, so we refuse the
-	// bytes outright rather than store them and rely on the serve path
-	// staying perfectly correct forever. See uploadDeniedExtensions for
-	// the full rationale.
-	if isUploadDenied(header.Filename, contentType) {
-		writeError(w, http.StatusUnsupportedMediaType, "this file type is not allowed")
-		return
 	}
 	// Seek back so the full file is uploaded.
 	if _, err := file.Seek(0, io.SeekStart); err != nil {

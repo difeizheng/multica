@@ -449,42 +449,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		realtime.HandleWebSocket(hub, mc, pr, slugResolver, w, r)
 	})
 
-	// Local file serving (when using local storage).
-	//
-	// The disclosure (security-findings-2026-06-02) explicitly flagged this
-	// route as a layer in the SVG-XSS chain: it was unauthenticated, served
-	// directory listings, and lacked nosniff/CSP. The primary fix (PR #3023)
-	// broke the inline-render step by forcing Content-Disposition: attachment
-	// for non-media types, but the layered defenses here stay open until we
-	// add them.
-	//
-	// Auth dispatch is two-track:
-	//   - Signed-query (?exp=&sig=): the route bypasses middleware.Auth and
-	//     ServeLocalUpload validates the HMAC signature itself. This is the
-	//     path used by token-auth clients (Desktop, legacy-token Web,
-	//     mobile) for inline <img>/<video>/<iframe> resource loads —
-	//     browsers do not attach Authorization headers to those, so a
-	//     server-side mediated short-lived signed URL is the only way to
-	//     keep them working after we authenticate /uploads/*. Mirror of
-	//     S3 + CloudFront's presigned-URL flow.
-	//   - Bearer / cookie: middleware.Auth runs first, then
-	//     ServeLocalUpload enforces workspace membership.
+	// Local file serving (when using local storage)
 	if local, ok := store.(*storage.LocalStorage); ok {
-		inner := h.ServeLocalUpload(local)
-		authed := middleware.Auth(queries, patCache, cloudPATVerifier)(inner)
 		r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
-			// If the request carries BOTH signed-query parameters,
-			// route it to the inner handler with no Auth wrapper —
-			// the signature itself is the authority. ServeLocalUpload
-			// fails the request closed if either is malformed or
-			// expired, so a partial signature is not a downgrade
-			// path to "no auth."
-			exp, sig := storage.LocalUploadSignatureFromQuery(r.URL.Query())
-			if exp != "" && sig != "" {
-				inner.ServeHTTP(w, r)
-				return
-			}
-			authed.ServeHTTP(w, r)
+			file := strings.TrimPrefix(r.URL.Path, "/uploads/")
+			local.ServeFile(w, r, file)
 		})
 	}
 

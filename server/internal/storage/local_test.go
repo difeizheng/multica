@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -517,91 +516,5 @@ func TestLocalStorage_GetReader_MissingKey(t *testing.T) {
 	if rc, err := store.GetReader(context.Background(), "nonexistent.txt"); err == nil {
 		rc.Close()
 		t.Fatal("GetReader should error on missing key")
-	}
-}
-
-
-// TestLocalStorage_ServeFile_RejectsDirectoryListing verifies that a request
-// for /uploads/<dir> or /uploads/<dir>/ does NOT return an HTML index.
-// http.ServeFile renders such paths as a directory listing when no
-// index.html is present, which leaks every UUID filename in the workspace —
-// directly enabling the IDOR-by-enumeration step of the chain documented in
-// security-findings-2026-06-02.
-func TestLocalStorage_ServeFile_RejectsDirectoryListing(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("LOCAL_UPLOAD_DIR", tmpDir)
-
-	store := NewLocalStorageFromEnv()
-	if store == nil {
-		t.Fatal("NewLocalStorageFromEnv returned nil")
-	}
-
-	// Seed two real upload-style files inside a workspace dir so a
-	// listing would have something to leak.
-	ctx := context.Background()
-	if _, err := store.Upload(ctx, "workspaces/ws-1/aaa.png", []byte("body"), "image/png", "logo.png"); err != nil {
-		t.Fatalf("Upload aaa.png: %v", err)
-	}
-	if _, err := store.Upload(ctx, "workspaces/ws-1/bbb.svg", []byte("body"), "image/svg+xml", "diagram.svg"); err != nil {
-		t.Fatalf("Upload bbb.svg: %v", err)
-	}
-
-	cases := []struct {
-		name string
-		key  string
-	}{
-		{"empty key", ""},
-		{"trailing slash on workspace dir", "workspaces/ws-1/"},
-		{"workspace dir without slash", "workspaces/ws-1"},
-		{"trailing slash on uploads root", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/uploads/"+tc.key, nil)
-			rec := httptest.NewRecorder()
-			store.ServeFile(rec, req, tc.key)
-
-			// A directory listing would be 200 + an HTML body that
-			// embeds the UUID filenames. Anything else is fine; we
-			// assert specifically that the body does NOT mention any
-			// of the seeded keys.
-			body := rec.Body.String()
-			if strings.Contains(body, "aaa.png") || strings.Contains(body, "bbb.svg") {
-				t.Fatalf("body leaked directory contents: %q", body)
-			}
-			if rec.Code == http.StatusOK {
-				t.Errorf("status = 200, want 404 (directory listing must not return 200)")
-			}
-		})
-	}
-}
-
-// TestLocalStorage_ServeFile_HardeningHeaders verifies that every successful
-// upload response carries the X-Content-Type-Options: nosniff header and a
-// tight per-response Content-Security-Policy. These are the two header
-// recommendations from the disclosure's hardening list.
-func TestLocalStorage_ServeFile_HardeningHeaders(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("LOCAL_UPLOAD_DIR", tmpDir)
-
-	store := NewLocalStorageFromEnv()
-	if store == nil {
-		t.Fatal("NewLocalStorageFromEnv returned nil")
-	}
-
-	ctx := context.Background()
-	if _, err := store.Upload(ctx, "workspaces/ws-1/abc.png", []byte("body"), "image/png", "logo.png"); err != nil {
-		t.Fatalf("Upload: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/uploads/workspaces/ws-1/abc.png", nil)
-	rec := httptest.NewRecorder()
-	store.ServeFile(rec, req, "workspaces/ws-1/abc.png")
-
-	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
-		t.Errorf("X-Content-Type-Options = %q, want %q", got, "nosniff")
-	}
-	if got := rec.Header().Get("Content-Security-Policy"); got != servedUploadCSP {
-		t.Errorf("Content-Security-Policy = %q, want %q", got, servedUploadCSP)
 	}
 }
