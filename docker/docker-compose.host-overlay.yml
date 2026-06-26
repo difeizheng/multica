@@ -1,0 +1,10 @@
+# Local override: point backend at the host-built overlay image
+# (multica-backend:host-overlay) instead of the official GHCR image.
+# Used to run locally-applied source changes without a full Docker build.
+#
+# Apply with:
+#   docker compose -f docker-compose.selfhost.yml \
+#     -f docker/docker-compose.host-overlay.yml up -d backend
+services:
+  backend:
+    image: multica-backend:host-overlay

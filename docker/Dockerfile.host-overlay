@@ -1,0 +1,13 @@
+# Overlay locally-built (host cross-compiled) binaries onto the cached
+# official backend image. Used to apply source changes without pulling
+# the golang/alpine build images from Docker Hub (network-restricted env).
+#
+# Build context root must contain docker/host-build/<bin>.
+FROM ghcr.io/multica-ai/multica-backend:latest
+
+WORKDIR /app
+COPY host-build/server ./server
+COPY host-build/multica ./multica
+COPY host-build/migrate ./migrate
+COPY host-build/backfill_task_usage_hourly ./backfill_task_usage_hourly
+COPY host-build/backfill_codex_usage_cache ./backfill_codex_usage_cache

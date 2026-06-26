@@ -42,6 +42,9 @@ server/migrate
 server/daemon
 server/multica
 
+# Host-built binaries for the offline Docker overlay (scripts/redeploy-backend.sh)
+docker/host-build/
+
 # Test artifacts
 test-results/
 apps/web/test-results/
