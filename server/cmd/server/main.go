@@ -431,6 +431,13 @@ func main() {
 	if err := schedulerMgr.Register(scheduler.AutopilotScheduleDispatchJob(pool, queries, autopilotSvc)); err != nil {
 		slog.Warn("scheduler: failed to register autopilot_schedule_dispatch job", "error", err)
 	}
+	// Squad-health inspector (B): periodically wakes squad leaders about
+	// stalled squad-assigned issues so they can @mention members to resume.
+	// The terminal-state hook in TaskService (A) handles the immediate case;
+	// this job is the catch-all sweep (incl. completed-but-still-open work).
+	if err := schedulerMgr.Register(scheduler.SquadHealthInspectJob(queries, taskSvc)); err != nil {
+		slog.Warn("scheduler: failed to register squad_health_inspect job", "error", err)
+	}
 	go func() {
 		_ = schedulerMgr.Run(sweepCtx)
 	}()

@@ -149,3 +149,41 @@ LEFT JOIN issue i
        ON i.id = atq.issue_id
 WHERE sm.squad_id = $1
 ORDER BY sm.created_at ASC, atq.dispatched_at DESC NULLS LAST;
+
+-- name: ListStalledSquadIssues :many
+-- Open squad-assigned issues that look stalled: at least one non-leader
+-- member has a terminal task (failed/cancelled/completed) on it, no
+-- non-leader member currently has an active task on it, and the leader has
+-- no queued/dispatched task on it. Drives the periodic squad-health
+-- inspector (B), which enqueues a follow-up task for the leader per row.
+-- "Open" excludes the terminal issue statuses done/cancelled.
+SELECT
+    s.id            AS squad_id,
+    s.leader_id     AS leader_id,
+    i.id            AS issue_id,
+    i.workspace_id  AS workspace_id
+FROM squad s
+JOIN issue i
+       ON i.assignee_type = 'squad'
+      AND i.assignee_id = s.id
+WHERE s.archived_at IS NULL
+  AND i.status NOT IN ('done', 'cancelled')
+  AND EXISTS (
+      SELECT 1 FROM agent_task_queue t
+      WHERE t.issue_id = i.id
+        AND t.agent_id <> s.leader_id
+        AND t.status IN ('failed', 'cancelled', 'completed')
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue t
+      WHERE t.issue_id = i.id
+        AND t.agent_id <> s.leader_id
+        AND t.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue lt
+      WHERE lt.issue_id = i.id
+        AND lt.agent_id = s.leader_id
+        AND lt.status IN ('queued', 'dispatched')
+  );
+

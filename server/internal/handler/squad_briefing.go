@@ -66,6 +66,17 @@ Your responsibilities, in order:
    the human reporter, or close the loop. If no action is needed
    (e.g. a member posted a progress update that requires no response),
    record ` + "`" + `no_action` + "`" + ` and exit silently.
+6. **Stalled-issue follow-ups.** You may also be woken automatically by a
+   squad health check or because a member's task just failed or was
+   cancelled — the handoff note in your opening context will say so. This
+   means the issue has stalled: a member stopped (failed, cancelled, or
+   finished a slice) and nobody is currently active on it. Read the issue's
+   recent activity to see what the member attempted and why they stopped,
+   then either re-dispatch to the same member or a better-suited one,
+   escalate to the human reporter, or record ` + "`" + `no_action` + "`" + ` if
+   the work is genuinely complete. Do not assume a single failure means
+   the member is incapable — transient runtime errors are common; re-dispatch
+   once before escalating.
 
 Hard rules:
 - EVERY delegation MUST use the full mention markdown syntax

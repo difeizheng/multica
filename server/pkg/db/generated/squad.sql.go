@@ -563,6 +563,76 @@ func (q *Queries) ListSquadsByMember(ctx context.Context, arg ListSquadsByMember
 	return items, nil
 }
 
+const listStalledSquadIssues = `-- name: ListStalledSquadIssues :many
+SELECT
+    s.id            AS squad_id,
+    s.leader_id     AS leader_id,
+    i.id            AS issue_id,
+    i.workspace_id  AS workspace_id
+FROM squad s
+JOIN issue i
+       ON i.assignee_type = 'squad'
+      AND i.assignee_id = s.id
+WHERE s.archived_at IS NULL
+  AND i.status NOT IN ('done', 'cancelled')
+  AND EXISTS (
+      SELECT 1 FROM agent_task_queue t
+      WHERE t.issue_id = i.id
+        AND t.agent_id <> s.leader_id
+        AND t.status IN ('failed', 'cancelled', 'completed')
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue t
+      WHERE t.issue_id = i.id
+        AND t.agent_id <> s.leader_id
+        AND t.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue lt
+      WHERE lt.issue_id = i.id
+        AND lt.agent_id = s.leader_id
+        AND lt.status IN ('queued', 'dispatched')
+  )
+`
+
+type ListStalledSquadIssuesRow struct {
+	SquadID     pgtype.UUID `json:"squad_id"`
+	LeaderID    pgtype.UUID `json:"leader_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Open squad-assigned issues that look stalled: at least one non-leader
+// member has a terminal task (failed/cancelled/completed) on it, no
+// non-leader member currently has an active task on it, and the leader has
+// no queued/dispatched task on it. Drives the periodic squad-health
+// inspector (B), which enqueues a follow-up task for the leader per row.
+// "Open" excludes the terminal issue statuses done/cancelled.
+func (q *Queries) ListStalledSquadIssues(ctx context.Context) ([]ListStalledSquadIssuesRow, error) {
+	rows, err := q.db.Query(ctx, listStalledSquadIssues)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStalledSquadIssuesRow{}
+	for rows.Next() {
+		var i ListStalledSquadIssuesRow
+		if err := rows.Scan(
+			&i.SquadID,
+			&i.LeaderID,
+			&i.IssueID,
+			&i.WorkspaceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const removeSquadMember = `-- name: RemoveSquadMember :execrows
 DELETE FROM squad_member
 WHERE squad_id = $1 AND member_type = $2 AND member_id = $3

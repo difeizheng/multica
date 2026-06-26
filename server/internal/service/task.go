@@ -1752,6 +1752,11 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 	s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, task)
 	s.NotifyTaskFinished(task)
 
+	// Squad-leader follow-up (A): when a member's task was cancelled, nudge
+	// the squad leader to reassess the issue. Best-effort.
+	s.maybeEnqueueSquadLeaderFollowUp(ctx, task,
+		"A member task on this issue was cancelled; please review and re-dispatch if needed.")
+
 	return &CancelTaskResult{
 		Task:                 task,
 		CancelledChatMessage: cancelledChatMessage,
@@ -3104,6 +3109,15 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 
 	// Broadcast
 	s.broadcastTaskEvent(ctx, protocol.EventTaskFailed, task)
+
+	// Squad-leader follow-up (A): when a member's task failed and no
+	// auto-retry is pending, nudge the squad leader to inspect and
+	// re-dispatch. Skipped while retried != nil because the new attempt
+	// means the member is effectively still working. Best-effort.
+	if retried == nil {
+		s.maybeEnqueueSquadLeaderFollowUp(ctx, task,
+			"A member task on this issue failed unexpectedly; please review and re-dispatch if needed.")
+	}
 
 	return &task, nil
 }
