@@ -81,6 +81,23 @@
     "unsaved_changes": "保存していない変更",
     "save_button": "保存"
   },
+  "inspection_tab": {
+    "tab_label": "点検",
+    "section_title": "リーダーの点検履歴",
+    "outcome_action": "対応済み",
+    "outcome_no_action": "対応不要",
+    "outcome_failed": "失敗",
+    "empty_state": "点検記録はまだありません",
+    "duration_label": "実行時間 {{duration}}",
+    "rhythm_last": "前回点検",
+    "rhythm_next": "次回",
+    "rhythm_imminent": "まもなく点検",
+    "rhythm_in_minutes": "{{minutes}} 分後",
+    "rhythm_recent": "直近7日の点検",
+    "rhythm_dispatched": "再割当",
+    "rhythm_failed": "失敗",
+    "events_count_other": "{{count}} 件"
+  },
   "scope": {
     "mine": "自分",
     "all": "すべて"

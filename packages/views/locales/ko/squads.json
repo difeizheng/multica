@@ -84,6 +84,24 @@
     "unsaved_changes": "저장하지 않은 변경사항",
     "save_button": "저장"
   },
+  "inspection_tab": {
+    "tab_label": "점검",
+    "section_title": "리더 점검 기록",
+    "outcome_action": "조치함",
+    "outcome_no_action": "조치 불필요",
+    "outcome_failed": "실패",
+    "empty_state": "아직 점검 기록이 없습니다",
+    "duration_label": "실행 시간 {{duration}}",
+    "rhythm_last": "최근 점검",
+    "rhythm_next": "다음 점검",
+    "rhythm_imminent": "곧 점검",
+    "rhythm_in_minutes": "{{minutes}}분 후",
+    "rhythm_recent": "최근 7일 점검",
+    "rhythm_dispatched": "재할당",
+    "rhythm_failed": "실패",
+    "events_count_one": "{{count}}회",
+    "events_count_other": "{{count}}회"
+  },
   "scope": {
     "mine": "내 스쿼드",
     "all": "전체"

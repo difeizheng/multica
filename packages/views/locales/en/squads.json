@@ -84,6 +84,24 @@
     "unsaved_changes": "Unsaved changes",
     "save_button": "Save"
   },
+  "inspection_tab": {
+    "tab_label": "Inspections",
+    "section_title": "Leader Inspection History",
+    "outcome_action": "Action taken",
+    "outcome_no_action": "No action needed",
+    "outcome_failed": "Failed",
+    "empty_state": "No inspection records yet",
+    "duration_label": "ran {{duration}}",
+    "rhythm_last": "Last check",
+    "rhythm_next": "Next check",
+    "rhythm_imminent": "due now",
+    "rhythm_in_minutes": "in {{minutes}}m",
+    "rhythm_recent": "Checks (7d)",
+    "rhythm_dispatched": "Re-dispatched",
+    "rhythm_failed": "Failed",
+    "events_count_one": "{{count}} check",
+    "events_count_other": "{{count}} checks"
+  },
   "scope": {
     "mine": "Mine",
     "all": "All"
