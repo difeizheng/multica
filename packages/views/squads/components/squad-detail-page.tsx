@@ -10,13 +10,16 @@ import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { isImeComposing } from "@multica/core/utils";
 import { getShortcut, shortcutMatchesEvent } from "@multica/core/shortcuts";
 import { useTimeAgo } from "../../i18n";
-import { agentListOptions, memberListOptions, squadMemberStatusOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions, squadInspectionHistoryOptions, squadMemberStatusOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import { runtimeListOptions } from "@multica/core/runtimes";
+import { CreateAgentDialog } from "../../agents/components/create-agent-dialog";
 import { useNavigation } from "../../navigation";
 import { AppLink } from "../../navigation";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { PageHeader } from "../../layout/page-header";
-import { Users, Plus, Trash2, ArrowUpRight, Crown, Loader2, Pencil, FileText, Save } from "lucide-react";
+import { Users, Plus, Trash2, ArrowUpRight, Crown, Camera, Loader2, Pencil, FileText, Save, Activity } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import { Badge } from "@multica/ui/components/ui/badge";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -59,7 +62,7 @@ import {
 } from "../../issues/components/pickers/property-picker";
 import { ChevronDown, UserPlus } from "lucide-react";
 import { toast } from "sonner";
-import type { Squad, SquadMember, SquadMemberStatus, SquadMemberStatusValue, Agent, MemberWithUser } from "@multica/core/types";
+import type { Squad, SquadMember, SquadMemberStatus, SquadMemberStatusValue, SquadInspectionRecord, Agent, CreateAgentRequest, MemberWithUser } from "@multica/core/types";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 
@@ -97,6 +100,14 @@ export function SquadDetailPage() {
     for (const s of memberStatusResp?.members ?? []) map.set(s.member_id, s);
     return map;
   }, [memberStatusResp]);
+
+  // Leader inspection (wake-up + evaluation) history for the read-only
+  // "Inspections" tab. Same freshness model as members-status.
+  const { data: inspectionResp } = useQuery({
+    ...squadInspectionHistoryOptions(wsId, squadId),
+    enabled: !!workspace?.id && !!squadId,
+  });
+  const inspectionEntries = useMemo(() => inspectionResp?.entries ?? [], [inspectionResp]);
 
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: wsMembers = [] } = useQuery(memberListOptions(wsId));
@@ -239,6 +250,8 @@ export function SquadDetailPage() {
           members={members}
           memberStatusById={memberStatusById}
           canManage={canManage}
+          inspectionEntries={inspectionEntries}
+          getIssueHref={(id) => p.issueDetail(id)}
           isLeader={isLeader}
           isArchived={isArchived}
           getEntityName={getEntityName}
@@ -931,11 +944,12 @@ function SquadDescriptionEditorBody({
 // Mirrors AgentOverviewPane: dirty-guard via AlertDialog when switching tabs
 // with unsaved Instructions.
 // ---------------------------------------------------------------------------
-type SquadDetailTab = "members" | "instructions";
+type SquadDetailTab = "members" | "instructions" | "inspection";
 
 const squadDetailTabs: { id: SquadDetailTab; label: string; icon: typeof FileText }[] = [
   { id: "members", label: "Members", icon: Users },
   { id: "instructions", label: "Instructions", icon: FileText },
+  { id: "inspection", label: "Inspections", icon: Activity },
 ];
 
 function SquadOverviewPane({
@@ -943,6 +957,8 @@ function SquadOverviewPane({
   members,
   memberStatusById,
   canManage,
+  inspectionEntries,
+  getIssueHref,
   isLeader,
   isArchived,
   getEntityName,
@@ -961,6 +977,8 @@ function SquadOverviewPane({
   // false the tabs render read-only (no add/remove/leader/role edits, no
   // Save). See canManageSquad in server/internal/handler/squad.go.
   canManage: boolean;
+  inspectionEntries: SquadInspectionRecord[];
+  getIssueHref: (id: string) => string;
   isLeader: (m: SquadMember) => boolean;
   isArchived: (m: SquadMember) => boolean;
   getEntityName: (type: string, id: string) => string;
@@ -1009,7 +1027,7 @@ function SquadOverviewPane({
             }`}
           >
             <tab.icon className="h-3.5 w-3.5" />
-            {tab.label}
+            {tab.id === "inspection" ? t(($) => $.inspection_tab.tab_label) : tab.label}
           </button>
         ))}
       </div>
@@ -1041,6 +1059,11 @@ function SquadOverviewPane({
               onSave={onSaveInstructions}
               onDirtyChange={setActiveDirty}
             />
+          </div>
+        )}
+        {activeTab === "inspection" && (
+          <div className="flex h-full flex-col p-4 md:p-6">
+            <SquadInspectionTab entries={inspectionEntries} getIssueHref={getIssueHref} />
           </div>
         )}
       </div>
@@ -1294,6 +1317,326 @@ function SquadMembersTab({
       </div>
     </div>
   );
+}
+
+// Inspection tab body — read-only view of the squad leader's wake-up +
+// evaluation records (sourced from activity_log `squad_leader_evaluated`).
+// Two parts: a rhythm panel (cadence + recent counts) and a per-issue
+// vertical timeline that shows how the leader shepherded each issue.
+// All stats are derived client-side from the fetched records — no extra
+// backend call, no write actions.
+
+// The periodic inspector runs on this interval, so the next wake-up is at
+// most this far after the last recorded evaluation.
+const INSPECTION_INTERVAL_MS = 15 * 60 * 1000;
+const INSPECTION_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface InspectionStats {
+  lastAt: string | null;
+  nextInMs: number | null;
+  recentTotal: number;
+  recentDispatched: number;
+  recentFailed: number;
+  issueCount: number;
+}
+
+interface InspectionIssueGroup {
+  issueId: string;
+  issueNumber: number | null;
+  issueTitle: string;
+  entries: SquadInspectionRecord[];
+}
+
+// computeInspectionStats rolls up the fetched records into cadence + recent
+// activity counts. Entries arrive DESC by created_at, so entries[0] is the
+// most recent evaluation. The 7-day window is capped by what the endpoint
+// returns (last 50) — fine for small teams; noted here so a future stats
+// endpoint can drop in without changing the UI.
+function computeInspectionStats(entries: SquadInspectionRecord[]): InspectionStats {
+  if (entries.length === 0) {
+    return {
+      lastAt: null,
+      nextInMs: null,
+      recentTotal: 0,
+      recentDispatched: 0,
+      recentFailed: 0,
+      issueCount: 0,
+    };
+  }
+  const now = Date.now();
+  const issues = new Set<string>();
+  let recentTotal = 0;
+  let recentDispatched = 0;
+  let recentFailed = 0;
+  for (const e of entries) {
+    issues.add(e.issue_id);
+    const ms = new Date(e.created_at).getTime();
+    if (Number.isNaN(ms) || now - ms > INSPECTION_RECENT_WINDOW_MS) continue;
+    recentTotal++;
+    if (e.outcome === "action") recentDispatched++;
+    else if (e.outcome === "failed") recentFailed++;
+  }
+  const lastAt = entries[0]!.created_at;
+  const lastMs = new Date(lastAt).getTime();
+  const nextInMs = Number.isNaN(lastMs) ? null : lastMs + INSPECTION_INTERVAL_MS - now;
+  return {
+    lastAt,
+    nextInMs,
+    recentTotal,
+    recentDispatched,
+    recentFailed,
+    issueCount: issues.size,
+  };
+}
+
+// groupInspectionsByIssue buckets records per issue, preserving the recency
+// order of first appearance (entries are DESC). Within an issue the records
+// stay DESC so the most recent leader action sits at the top of each lane.
+function groupInspectionsByIssue(entries: SquadInspectionRecord[]): InspectionIssueGroup[] {
+  const order: string[] = [];
+  const byIssue = new Map<string, InspectionIssueGroup>();
+  for (const e of entries) {
+    let g = byIssue.get(e.issue_id);
+    if (!g) {
+      g = {
+        issueId: e.issue_id,
+        issueNumber: e.issue_number ?? null,
+        issueTitle: e.issue_title ?? "",
+        entries: [],
+      };
+      byIssue.set(e.issue_id, g);
+      order.push(e.issue_id);
+    }
+    g.entries.push(e);
+  }
+  return order.map((id) => byIssue.get(id) as InspectionIssueGroup);
+}
+
+function SquadInspectionTab({
+  entries,
+  getIssueHref,
+}: {
+  entries: SquadInspectionRecord[];
+  getIssueHref: (id: string) => string;
+}) {
+  const { t } = useT("squads");
+  const stats = useMemo(() => computeInspectionStats(entries), [entries]);
+  const groups = useMemo(() => groupInspectionsByIssue(entries), [entries]);
+
+  if (entries.length === 0) {
+    return (
+      <div className="flex flex-1 items-center justify-center py-16 text-sm text-muted-foreground">
+        {t(($) => $.inspection_tab.empty_state)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <SquadInspectionRhythm stats={stats} />
+      <div className="text-sm font-medium text-muted-foreground">
+        {t(($) => $.inspection_tab.section_title)}
+      </div>
+      <div className="flex flex-col gap-3">
+        {groups.map((g) => (
+          <SquadInspectionIssueLane key={g.issueId} group={g} getIssueHref={getIssueHref} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// SquadInspectionRhythm — the cadence summary. Answers the user's "is the
+// leader actually checking on a cadence?" at a glance.
+function SquadInspectionRhythm({ stats }: { stats: InspectionStats }) {
+  const { t } = useT("squads");
+  const timeAgo = useTimeAgo();
+
+  let nextLabel = "—";
+  if (stats.nextInMs != null) {
+    if (stats.nextInMs <= 0) {
+      nextLabel = t(($) => $.inspection_tab.rhythm_imminent);
+    } else {
+      const minutes = Math.max(1, Math.round(stats.nextInMs / 60000));
+      nextLabel = t(($) => $.inspection_tab.rhythm_in_minutes, { minutes });
+    }
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <InspectionStatTile
+        label={t(($) => $.inspection_tab.rhythm_last)}
+        value={stats.lastAt ? timeAgo(stats.lastAt) : "—"}
+      />
+      <InspectionStatTile
+        label={t(($) => $.inspection_tab.rhythm_next)}
+        value={nextLabel}
+      />
+      <InspectionStatTile
+        label={t(($) => $.inspection_tab.rhythm_recent)}
+        value={`${stats.recentTotal}`}
+      />
+      <InspectionStatTile
+        label={t(($) => $.inspection_tab.rhythm_dispatched)}
+        value={`${stats.recentDispatched}`}
+      />
+      {stats.recentFailed > 0 && (
+        <InspectionStatTile
+          label={t(($) => $.inspection_tab.rhythm_failed)}
+          value={`${stats.recentFailed}`}
+          tone="failed"
+        />
+      )}
+    </div>
+  );
+}
+
+function InspectionStatTile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "failed";
+}) {
+  return (
+    <div className="flex flex-col gap-1 rounded-lg border p-3">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span
+        className={
+          tone === "failed"
+            ? "text-sm font-semibold text-destructive"
+            : "text-sm font-semibold tabular-nums"
+        }
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function SquadInspectionIssueLane({
+  group,
+  getIssueHref,
+}: {
+  group: InspectionIssueGroup;
+  getIssueHref: (id: string) => string;
+}) {
+  const { t } = useT("squads");
+  return (
+    <div className="rounded-lg border">
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <AppLink
+          href={getIssueHref(group.issueId)}
+          className="min-w-0 truncate text-sm font-medium hover:underline"
+        >
+          {group.issueNumber != null ? `#${group.issueNumber} ` : ""}
+          {group.issueTitle || group.issueId}
+        </AppLink>
+        <Badge variant="secondary" className="ml-auto shrink-0 tabular-nums">
+          {t(($) => $.inspection_tab.events_count, { count: group.entries.length })}
+        </Badge>
+      </div>
+      <ol>
+        {group.entries.map((entry, idx) => (
+          <SquadInspectionTimelineRow
+            key={entry.id}
+            entry={entry}
+            isLast={idx === group.entries.length - 1}
+          />
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function SquadInspectionTimelineRow({
+  entry,
+  isLast,
+}: {
+  entry: SquadInspectionRecord;
+  isLast: boolean;
+}) {
+  const { t } = useT("squads");
+  const timeAgo = useTimeAgo();
+
+  // outcome → badge variant + localized label + timeline dot color. Unknown
+  // outcomes (server-side enum drift) downgrade to a neutral pill rather than
+  // crashing, same defensive shape as the rest of the detail page.
+  const outcomeVariant =
+    entry.outcome === "action" ? "default" : entry.outcome === "failed" ? "destructive" : "secondary";
+  const outcomeLabel =
+    entry.outcome === "action"
+      ? t(($) => $.inspection_tab.outcome_action)
+      : entry.outcome === "no_action"
+        ? t(($) => $.inspection_tab.outcome_no_action)
+        : entry.outcome === "failed"
+          ? t(($) => $.inspection_tab.outcome_failed)
+          : entry.outcome;
+  const dotClass =
+    entry.outcome === "action"
+      ? "bg-primary"
+      : entry.outcome === "failed"
+        ? "bg-destructive"
+        : "bg-muted-foreground/40";
+
+  return (
+    <li className="flex gap-3 px-3 py-2.5">
+      <div className="relative flex w-2.5 justify-center">
+        {!isLast && (
+          <span
+            className="absolute left-1/2 top-5 h-full w-px -translate-x-1/2 bg-border"
+            aria-hidden
+          />
+        )}
+        <span className={`mt-0.5 size-2.5 rounded-full ${dotClass}`} aria-hidden />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex items-center justify-between gap-2">
+          <Badge variant={outcomeVariant}>{outcomeLabel}</Badge>
+          <span
+            className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground"
+            title={entry.created_at}
+          >
+            <span className="tabular-nums">{formatAbsoluteTime(entry.created_at)}</span>
+            <span className="text-[10px] opacity-70">{timeAgo(entry.created_at)}</span>
+          </span>
+        </div>
+        {entry.reason && <p className="text-xs text-muted-foreground">{entry.reason}</p>}
+        {entry.duration_ms != null && entry.duration_ms >= 0 && (
+          <span className="text-xs text-muted-foreground">
+            {t(($) => $.inspection_tab.duration_label, { duration: formatDurationMs(entry.duration_ms) })}
+          </span>
+        )}
+      </div>
+    </li>
+  );
+}
+
+// formatDurationMs turns a millisecond run length into a terse label.
+function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s % 60);
+  return `${m}m${rem}s`;
+}
+
+// formatAbsoluteTime renders an ISO timestamp as a terse local wall-clock
+// label for the timeline ("发起时间"). Locale-aware via toLocaleString so it
+// follows the browser's format. Safe from SSR hydration mismatch because the
+// timeline rows only render once entries arrive client-side from useQuery.
+function formatAbsoluteTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 // Instructions tab body — mirrors agent's InstructionsTab. ContentEditor +

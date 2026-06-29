@@ -81,6 +81,24 @@
     "unsaved_changes": "有未保存的修改",
     "save_button": "保存"
   },
+  "inspection_tab": {
+    "tab_label": "巡检",
+    "section_title": "队长巡检历史",
+    "outcome_action": "已采取行动",
+    "outcome_no_action": "无需操作",
+    "outcome_failed": "执行失败",
+    "empty_state": "暂无巡检记录",
+    "duration_label": "耗时 {{duration}}",
+    "rhythm_last": "上次巡检",
+    "rhythm_next": "下次约",
+    "rhythm_imminent": "即将巡检",
+    "rhythm_in_minutes": "{{minutes}} 分钟后",
+    "rhythm_recent": "近 7 天巡检",
+    "rhythm_dispatched": "重新派发",
+    "rhythm_failed": "失败",
+    "events_count_one": "{{count}} 次",
+    "events_count_other": "{{count}} 次"
+  },
   "scope": {
     "mine": "我的",
     "all": "全部"

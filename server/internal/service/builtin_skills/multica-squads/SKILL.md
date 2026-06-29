@@ -75,6 +75,11 @@ multica squad activity <issue-id> action|no_action|failed --reason "<why>" --out
 `activity` is a write: it records the leader's evaluation decision on an issue.
 Use it only when acting as the squad leader after evaluating a trigger.
 
+Write `--reason` in the same language as the issue's title and its recent
+comments (e.g. 简体中文 for a Chinese issue). The reason is shown verbatim on
+the squad "Inspections" panel for the whole team, so it must read naturally in
+the team's working language — keep it to one or two concise sentences.
+
 Issue/comment commands often needed with squads:
 
 ```bash
