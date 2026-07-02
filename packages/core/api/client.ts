@@ -137,6 +137,7 @@ import type {
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
+  SquadInspectionHistoryResponse,
   BillingBalance,
   BillingTransactionsPage,
   BillingBatchesPage,
@@ -192,6 +193,7 @@ import {
   EMPTY_SQUAD,
   EMPTY_SQUAD_LIST,
   EMPTY_SQUAD_MEMBER_STATUS_LIST,
+  EMPTY_SQUAD_INSPECTION_HISTORY,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
@@ -217,6 +219,7 @@ import {
   SquadSchema,
   SquadListSchema,
   SquadMemberStatusListResponseSchema,
+  SquadInspectionHistoryResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
   UserSchema,
@@ -2427,7 +2430,7 @@ export class ApiClient {
     }) as Squad;
   }
 
-  async updateSquad(id: string, data: { name?: string; description?: string; instructions?: string; leader_id?: string; avatar_url?: string }): Promise<Squad> {
+  async updateSquad(id: string, data: { name?: string; description?: string; instructions?: string; leader_id?: string; avatar_url?: string; heartbeat_interval_minutes?: number }): Promise<Squad> {
     const raw = await this.fetch<unknown>(`/api/squads/${id}`, { method: "PUT", body: JSON.stringify(data) });
     return parseWithFallback(raw, SquadSchema, EMPTY_SQUAD, {
       endpoint: "PUT /api/squads/:id",
@@ -2463,6 +2466,16 @@ export class ApiClient {
     return parseWithFallback(raw, SquadMemberStatusListResponseSchema, EMPTY_SQUAD_MEMBER_STATUS_LIST, {
       endpoint: "GET /api/squads/:id/members/status",
     }) as SquadMemberStatusListResponse;
+  }
+
+  // Leader inspection (wake-up + evaluation) history for the read-only
+  // "Inspections" tab. Lenient schema so a new outcome value or extra field
+  // can't white-screen the panel.
+  async getSquadInspectionHistory(squadId: string): Promise<SquadInspectionHistoryResponse> {
+    const raw = await this.fetch<unknown>(`/api/squads/${squadId}/inspection-history`);
+    return parseWithFallback(raw, SquadInspectionHistoryResponseSchema, EMPTY_SQUAD_INSPECTION_HISTORY, {
+      endpoint: "GET /api/squads/:id/inspection-history",
+    }) as SquadInspectionHistoryResponse;
   }
 
   // Autopilots

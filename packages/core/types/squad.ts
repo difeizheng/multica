@@ -14,6 +14,7 @@ export interface Squad {
   name: string;
   description: string;
   instructions: string;
+  heartbeat_interval_minutes: number;
   avatar_url: string | null;
   leader_id: string;
   creator_id: string;
@@ -58,6 +59,7 @@ export interface UpdateSquadRequest {
   instructions?: string;
   leader_id?: string;
   avatar_url?: string;
+  heartbeat_interval_minutes?: number;
 }
 
 export interface AddSquadMemberRequest {
@@ -117,4 +119,29 @@ export interface SquadMemberStatus {
 
 export interface SquadMemberStatusListResponse {
   members: SquadMemberStatus[];
+}
+
+// SquadInspectionRecord is one leader wake-up + evaluation, sourced from the
+// `squad_leader_evaluated` activity the leader records each time it is woken
+// (by the periodic inspector, the terminal-state hook, an @mention, or an
+// assign). Drives the read-only "Inspections" tab on the squad detail page.
+export interface SquadInspectionRecord {
+  id: string;
+  issue_id: string;
+  issue_number: number | null;
+  issue_title: string;
+  issue_status: string;
+  outcome: SquadActivityOutcome | string;
+  reason: string;
+  created_at: string;
+  duration_ms: number | null;
+  // Only present on outcome=action rows written after dispatch verification
+  // shipped. null on legacy rows and on no_action/failed outcomes — treat as
+  // verified. `false` means the leader claimed `action` but no member task was
+  // spawned that turn (e.g. it only summarised or requested approval).
+  verified: boolean | null;
+}
+
+export interface SquadInspectionHistoryResponse {
+  entries: SquadInspectionRecord[];
 }

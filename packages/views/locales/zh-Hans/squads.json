@@ -85,6 +85,8 @@
     "tab_label": "巡检",
     "section_title": "队长巡检历史",
     "outcome_action": "已采取行动",
+    "outcome_action_unverified": "待确认",
+    "outcome_action_unverified_hint": "队长记录了“已采取行动”，但本次未检测到实际的成员派单（可能只是总结或请求批准）",
     "outcome_no_action": "无需操作",
     "outcome_failed": "执行失败",
     "empty_state": "暂无巡检记录",
@@ -97,7 +99,13 @@
     "rhythm_dispatched": "重新派发",
     "rhythm_failed": "失败",
     "events_count_one": "{{count}} 次",
-    "events_count_other": "{{count}} 次"
+    "events_count_other": "{{count}} 次",
+    "interval_label": "巡检间隔",
+    "interval_suffix": "分钟",
+    "interval_save_button": "保存",
+    "interval_hint": "范围 {{min}}–{{max}} 分钟（默认 30）。每到这个时间，队长会被自动唤醒复查该小队下每个开放的 issue。",
+    "interval_saved": "巡检间隔已更新",
+    "interval_error": "请输入 {{min}}–{{max}} 之间的整数"
   },
   "scope": {
     "mine": "我的",

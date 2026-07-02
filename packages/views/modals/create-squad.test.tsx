@@ -238,6 +238,7 @@ function makeSquad(overrides: Partial<Squad> = {}): Squad {
     name: "New Squad",
     description: "",
     instructions: "",
+    heartbeat_interval_minutes: 30,
     avatar_url: null,
     leader_id: "agent-mine-1",
     creator_id: ME,

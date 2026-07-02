@@ -130,7 +130,7 @@ export function SquadDetailPage() {
   const [confirmArchive, setConfirmArchive] = useState(false);
 
   const updateSquadMut = useMutation({
-    mutationFn: (data: { name?: string; description?: string; instructions?: string; avatar_url?: string; leader_id?: string }) => api.updateSquad(squadId, data),
+    mutationFn: (data: { name?: string; description?: string; instructions?: string; avatar_url?: string; leader_id?: string; heartbeat_interval_minutes?: number }) => api.updateSquad(squadId, data),
     onSuccess: () => {
       refetchSquad();
       refetchMembers();
@@ -261,6 +261,8 @@ export function SquadDetailPage() {
           onRemoveMember={(m) => removeMemberMut.mutate(m)}
           onUpdateRole={async (m, role) => { await updateRoleMut.mutateAsync({ member: m, role }); }}
           onSaveInstructions={async (next) => { await updateSquadMut.mutateAsync({ instructions: next }); toast.success("Instructions saved"); }}
+          onSaveHeartbeatInterval={async (next) => { await updateSquadMut.mutateAsync({ heartbeat_interval_minutes: next }); toast.success(t(($) => $.inspection_tab.interval_saved)); }}
+          savingHeartbeatInterval={updateSquadMut.isPending}
           setLeaderPending={setLeaderMut.isPending}
         />
       </div>
@@ -968,6 +970,8 @@ function SquadOverviewPane({
   onRemoveMember,
   onUpdateRole,
   onSaveInstructions,
+  onSaveHeartbeatInterval,
+  savingHeartbeatInterval,
   setLeaderPending,
 }: {
   squad: Squad;
@@ -991,6 +995,8 @@ function SquadOverviewPane({
   onRemoveMember: (m: SquadMember) => void;
   onUpdateRole: (m: SquadMember, role: string) => Promise<void>;
   onSaveInstructions: (next: string) => Promise<void>;
+  onSaveHeartbeatInterval: (next: number) => Promise<void>;
+  savingHeartbeatInterval: boolean;
   setLeaderPending: boolean;
 }) {
   const { t } = useT("squads");
@@ -1063,7 +1069,13 @@ function SquadOverviewPane({
         )}
         {activeTab === "inspection" && (
           <div className="flex h-full flex-col p-4 md:p-6">
-            <SquadInspectionTab entries={inspectionEntries} getIssueHref={getIssueHref} />
+            <SquadInspectionTab
+              entries={inspectionEntries}
+              getIssueHref={getIssueHref}
+              intervalMinutes={squad.heartbeat_interval_minutes}
+              onSaveInterval={onSaveHeartbeatInterval}
+              savingInterval={savingHeartbeatInterval}
+            />
           </div>
         )}
       </div>
@@ -1326,9 +1338,13 @@ function SquadMembersTab({
 // All stats are derived client-side from the fetched records — no extra
 // backend call, no write actions.
 
-// The periodic inspector runs on this interval, so the next wake-up is at
-// most this far after the last recorded evaluation.
-const INSPECTION_INTERVAL_MS = 15 * 60 * 1000;
+// The periodic heartbeat inspector wakes each open squad issue on the squad's
+// configured interval (squad.heartbeat_interval_minutes, default 30). The
+// "next inspection" tile uses that same value to project the next wake-up, so
+// the countdown reflects the real cadence now that the heartbeat job actually
+// fires on it. Bounds mirror the server (server/internal/handler/squad.go).
+const INSPECTION_INTERVAL_MIN_MINUTES = 5;
+const INSPECTION_INTERVAL_MAX_MINUTES = 1440;
 const INSPECTION_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface InspectionStats {
@@ -1352,7 +1368,7 @@ interface InspectionIssueGroup {
 // most recent evaluation. The 7-day window is capped by what the endpoint
 // returns (last 50) — fine for small teams; noted here so a future stats
 // endpoint can drop in without changing the UI.
-function computeInspectionStats(entries: SquadInspectionRecord[]): InspectionStats {
+function computeInspectionStats(entries: SquadInspectionRecord[], intervalMs: number): InspectionStats {
   if (entries.length === 0) {
     return {
       lastAt: null,
@@ -1373,12 +1389,16 @@ function computeInspectionStats(entries: SquadInspectionRecord[]): InspectionSta
     const ms = new Date(e.created_at).getTime();
     if (Number.isNaN(ms) || now - ms > INSPECTION_RECENT_WINDOW_MS) continue;
     recentTotal++;
-    if (e.outcome === "action") recentDispatched++;
+    // Count an action as a real dispatch only when it was verified (a member
+    // task was spawned that turn). `verified` is null on legacy rows and on
+    // no_action/failed outcomes — treat null as verified so historical data
+    // is not silently dropped from the cadence count.
+    if (e.outcome === "action" && e.verified !== false) recentDispatched++;
     else if (e.outcome === "failed") recentFailed++;
   }
   const lastAt = entries[0]!.created_at;
   const lastMs = new Date(lastAt).getTime();
-  const nextInMs = Number.isNaN(lastMs) ? null : lastMs + INSPECTION_INTERVAL_MS - now;
+  const nextInMs = Number.isNaN(lastMs) ? null : lastMs + intervalMs - now;
   return {
     lastAt,
     nextInMs,
@@ -1415,33 +1435,114 @@ function groupInspectionsByIssue(entries: SquadInspectionRecord[]): InspectionIs
 function SquadInspectionTab({
   entries,
   getIssueHref,
+  intervalMinutes,
+  onSaveInterval,
+  savingInterval,
 }: {
   entries: SquadInspectionRecord[];
   getIssueHref: (id: string) => string;
+  intervalMinutes: number;
+  onSaveInterval: (next: number) => Promise<void>;
+  savingInterval: boolean;
 }) {
   const { t } = useT("squads");
-  const stats = useMemo(() => computeInspectionStats(entries), [entries]);
+  const intervalMs = Math.max(1, intervalMinutes) * 60_000;
+  const stats = useMemo(() => computeInspectionStats(entries, intervalMs), [entries, intervalMs]);
   const groups = useMemo(() => groupInspectionsByIssue(entries), [entries]);
-
-  if (entries.length === 0) {
-    return (
-      <div className="flex flex-1 items-center justify-center py-16 text-sm text-muted-foreground">
-        {t(($) => $.inspection_tab.empty_state)}
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-4">
-      <SquadInspectionRhythm stats={stats} />
-      <div className="text-sm font-medium text-muted-foreground">
-        {t(($) => $.inspection_tab.section_title)}
-      </div>
-      <div className="flex flex-col gap-3">
-        {groups.map((g) => (
-          <SquadInspectionIssueLane key={g.issueId} group={g} getIssueHref={getIssueHref} />
-        ))}
-      </div>
+      <SquadHeartbeatIntervalControl
+        intervalMinutes={intervalMinutes}
+        onSave={onSaveInterval}
+        saving={savingInterval}
+      />
+      {entries.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center py-16 text-sm text-muted-foreground">
+          {t(($) => $.inspection_tab.empty_state)}
+        </div>
+      ) : (
+        <>
+          <SquadInspectionRhythm stats={stats} />
+          <div className="text-sm font-medium text-muted-foreground">
+            {t(($) => $.inspection_tab.section_title)}
+          </div>
+          <div className="flex flex-col gap-3">
+            {groups.map((g) => (
+              <SquadInspectionIssueLane key={g.issueId} group={g} getIssueHref={getIssueHref} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// SquadHeartbeatIntervalControl — the per-squad periodic-inspection cadence
+// setting. Drives the squad_heartbeat_inspect scheduler job: a number input +
+// Save that PATCHes heartbeat_interval_minutes. Bounds mirror the server
+// (5–1440 min). Rendered at the top of the Inspections tab so the cadence is
+// discoverable right where the rhythm it controls is shown.
+function SquadHeartbeatIntervalControl({
+  intervalMinutes,
+  onSave,
+  saving,
+}: {
+  intervalMinutes: number;
+  onSave: (next: number) => Promise<void>;
+  saving: boolean;
+}) {
+  const { t } = useT("squads");
+  const [draft, setDraft] = useState(String(intervalMinutes));
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(String(intervalMinutes));
+    setError(null);
+  }, [intervalMinutes]);
+
+  const parsed = Number.parseInt(draft, 10);
+  const valid = Number.isFinite(parsed) && parsed >= INSPECTION_INTERVAL_MIN_MINUTES && parsed <= INSPECTION_INTERVAL_MAX_MINUTES;
+
+  const commit = async () => {
+    if (!valid) {
+      setError(t(($) => $.inspection_tab.interval_error, { min: INSPECTION_INTERVAL_MIN_MINUTES, max: INSPECTION_INTERVAL_MAX_MINUTES }));
+      return;
+    }
+    if (parsed === intervalMinutes) {
+      setError(null);
+      return;
+    }
+    try {
+      await onSave(parsed);
+      setError(null);
+    } catch {
+      setError(t(($) => $.inspection_tab.interval_error, { min: INSPECTION_INTERVAL_MIN_MINUTES, max: INSPECTION_INTERVAL_MAX_MINUTES }));
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-3">
+      <span className="text-xs font-medium text-muted-foreground">{t(($) => $.inspection_tab.interval_label)}</span>
+      <input
+        type="number"
+        min={INSPECTION_INTERVAL_MIN_MINUTES}
+        max={INSPECTION_INTERVAL_MAX_MINUTES}
+        value={draft}
+        onChange={(e) => { setDraft(e.target.value); if (error) setError(null); }}
+        onKeyDown={(e) => {
+          if (isImeComposing(e)) return;
+          if (e.key === "Enter") { e.preventDefault(); void commit(); }
+        }}
+        className="h-8 w-24 rounded-md border bg-background px-2 text-sm tabular-nums outline-none focus-visible:border-input"
+      />
+      <span className="text-xs text-muted-foreground">{t(($) => $.inspection_tab.interval_suffix)}</span>
+      <Button size="sm" onClick={() => void commit()} disabled={saving || !valid || parsed === intervalMinutes}>
+        {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+        {t(($) => $.inspection_tab.interval_save_button)}
+      </Button>
+      <span className="text-xs text-muted-foreground/70">{t(($) => $.inspection_tab.interval_hint, { min: INSPECTION_INTERVAL_MIN_MINUTES, max: INSPECTION_INTERVAL_MAX_MINUTES })}</span>
+      {error && <span className="text-xs text-destructive">{error}</span>}
     </div>
   );
 }
@@ -1564,11 +1665,26 @@ function SquadInspectionTimelineRow({
   // outcome → badge variant + localized label + timeline dot color. Unknown
   // outcomes (server-side enum drift) downgrade to a neutral pill rather than
   // crashing, same defensive shape as the rest of the detail page.
-  const outcomeVariant =
-    entry.outcome === "action" ? "default" : entry.outcome === "failed" ? "destructive" : "secondary";
+  //
+  // `verified === false` only happens on outcome=action rows: the leader
+  // claimed action but the backend found no member task was spawned that
+  // turn (e.g. it only summarised or requested approval). Show a less
+  // prominent "unverified" pill so users do not read it as a real dispatch.
+  // `verified == null` (legacy rows, or no_action/failed) is treated as
+  // verified and falls through to the normal action styling.
+  const unverifiedAction = entry.outcome === "action" && entry.verified === false;
+  const outcomeVariant = entry.outcome === "action"
+    ? unverifiedAction
+      ? "outline"
+      : "default"
+    : entry.outcome === "failed"
+      ? "destructive"
+      : "secondary";
   const outcomeLabel =
     entry.outcome === "action"
-      ? t(($) => $.inspection_tab.outcome_action)
+      ? unverifiedAction
+        ? t(($) => $.inspection_tab.outcome_action_unverified)
+        : t(($) => $.inspection_tab.outcome_action)
       : entry.outcome === "no_action"
         ? t(($) => $.inspection_tab.outcome_no_action)
         : entry.outcome === "failed"
@@ -1576,7 +1692,9 @@ function SquadInspectionTimelineRow({
           : entry.outcome;
   const dotClass =
     entry.outcome === "action"
-      ? "bg-primary"
+      ? unverifiedAction
+        ? "bg-muted-foreground/40"
+        : "bg-primary"
       : entry.outcome === "failed"
         ? "bg-destructive"
         : "bg-muted-foreground/40";
@@ -1594,7 +1712,9 @@ function SquadInspectionTimelineRow({
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex items-center justify-between gap-2">
-          <Badge variant={outcomeVariant}>{outcomeLabel}</Badge>
+          <Badge variant={outcomeVariant} title={unverifiedAction ? t(($) => $.inspection_tab.outcome_action_unverified_hint) : undefined}>
+            {outcomeLabel}
+          </Badge>
           <span
             className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground"
             title={entry.created_at}

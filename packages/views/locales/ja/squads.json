@@ -85,6 +85,8 @@
     "tab_label": "点検",
     "section_title": "リーダーの点検履歴",
     "outcome_action": "対応済み",
+    "outcome_action_unverified": "未確認",
+    "outcome_action_unverified_hint": "リーダーは「対応済み」と記録しましたが、今回のメンバーへの作業割り当ては検出されませんでした（要約や承認依頼のみの可能性があります）",
     "outcome_no_action": "対応不要",
     "outcome_failed": "失敗",
     "empty_state": "点検記録はまだありません",
@@ -96,7 +98,13 @@
     "rhythm_recent": "直近7日の点検",
     "rhythm_dispatched": "再割当",
     "rhythm_failed": "失敗",
-    "events_count_other": "{{count}} 件"
+    "events_count_other": "{{count}} 件",
+    "interval_label": "点検間隔",
+    "interval_suffix": "分",
+    "interval_save_button": "保存",
+    "interval_hint": "範囲 {{min}}～{{max}} 分（既定 30）。この時間が経過すると、オープンな各 issue をリーダーが自動的に再点検します。",
+    "interval_saved": "点検間隔を更新しました",
+    "interval_error": "{{min}}～{{max}} の整数を入力してください"
   },
   "scope": {
     "mine": "自分",

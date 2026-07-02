@@ -998,6 +998,7 @@ export const SquadSchema = z.object({
   name: z.string(),
   description: z.string().default(""),
   instructions: z.string().default(""),
+  heartbeat_interval_minutes: z.number().int().default(30),
   avatar_url: z.string().nullable().optional().transform((v) => v ?? null),
   leader_id: z.string(),
   creator_id: z.string(),
@@ -1017,6 +1018,7 @@ export const EMPTY_SQUAD: Squad = {
   name: "",
   description: "",
   instructions: "",
+  heartbeat_interval_minutes: 30,
   avatar_url: null,
   leader_id: "",
   creator_id: "",
@@ -1052,6 +1054,28 @@ export const SquadMemberStatusListResponseSchema = z.object({
 }).loose();
 
 export const EMPTY_SQUAD_MEMBER_STATUS_LIST = { members: [] };
+
+// Squad leader inspection (wake-up + evaluation) history. Outcome is a plain
+// string (not a narrow enum) so a new server-side outcome value degrades to a
+// neutral pill instead of failing the parse.
+const SquadInspectionRecordSchema = z.object({
+  id: z.string(),
+  issue_id: z.string(),
+  issue_number: z.number().nullable().optional().transform((v) => v ?? null),
+  issue_title: z.string(),
+  issue_status: z.string(),
+  outcome: z.string(),
+  reason: z.string(),
+  created_at: z.string(),
+  duration_ms: z.number().nullable().optional().transform((v) => v ?? null),
+  verified: z.boolean().nullable().optional().transform((v) => v ?? null),
+}).loose();
+
+export const SquadInspectionHistoryResponseSchema = z.object({
+  entries: z.array(SquadInspectionRecordSchema).default([]),
+}).loose();
+
+export const EMPTY_SQUAD_INSPECTION_HISTORY = { entries: [] };
 
 // ---------------------------------------------------------------------------
 // Structured error body — POST /api/workspaces/:wsId/issues 409 conflict.

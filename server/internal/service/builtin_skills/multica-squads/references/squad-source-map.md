@@ -229,6 +229,31 @@ the view gate `canAccessPrivateAgent`):
 - NOTE: the child-done wake does NOT use this gate anymore — see "Child-done
   Parent Trigger" above (MUL-4063).
 
+## Periodic health and heartbeat
+
+Source:
+
+```text
+server/internal/scheduler/jobs_squad_health.go      # SquadHealthInspectJob (stall detection, 15m)
+server/internal/scheduler/jobs_squad_heartbeat.go   # SquadHeartbeatInspectJob (periodic heartbeat)
+server/internal/service/squad_followup.go           # EnqueueSquadLeaderFollowUp ~35 (shared dedup entry)
+server/pkg/db/queries/squad.sql                     # ListStalledSquadIssues
+server/pkg/db/queries/activity.sql                  # ListSquadHeartbeatDueIssues
+```
+
+Contracts:
+
+- two background jobs wake the leader without any human action: stall detection
+  (`squad_health_inspect`, 15m cadence) and the periodic heartbeat
+  (`squad_heartbeat_inspect`, base tick 5m);
+- the heartbeat enqueues a leader follow-up for any open squad-assigned issue
+  whose last `squad_leader_evaluated` activity is older than the squad's
+  `heartbeat_interval_minutes` (default 30, range 5–1440), skipping issues
+  where the leader already has a queued/dispatched task;
+- both jobs route through `EnqueueSquadLeaderFollowUp`, which dedups against a
+  pending leader task and guards against self-trigger, so a race between the
+  two cannot double-enqueue.
+
 ## Tests
 
 Relevant test groups:

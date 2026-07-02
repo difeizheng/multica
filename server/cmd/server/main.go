@@ -438,6 +438,15 @@ func main() {
 	if err := schedulerMgr.Register(scheduler.SquadHealthInspectJob(queries, taskSvc)); err != nil {
 		slog.Warn("scheduler: failed to register squad_health_inspect job", "error", err)
 	}
+	// Squad-heartbeat inspector: periodically re-inspects every open
+	// squad-assigned issue on a per-squad cadence (heartbeat_interval_minutes,
+	// default 30), regardless of whether it is stalled. This guarantees a
+	// visible, regular "Inspections" rhythm even when members are steadily
+	// working. Shares the same deduped leader-follow-up entry point as the
+	// stall inspector, so the two cannot double-enqueue.
+	if err := schedulerMgr.Register(scheduler.SquadHeartbeatInspectJob(queries, taskSvc)); err != nil {
+		slog.Warn("scheduler: failed to register squad_heartbeat_inspect job", "error", err)
+	}
 	go func() {
 		_ = schedulerMgr.Run(sweepCtx)
 	}()

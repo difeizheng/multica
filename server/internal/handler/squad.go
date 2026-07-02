@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -19,12 +20,22 @@ import (
 
 // ── Response types ──────────────────────────────────────────────────────────
 
+// squadHeartbeatInterval{Min,Max}Minutes bound the per-squad periodic
+// heartbeat interval. Min matches the squad_heartbeat_inspect base tick (5m)
+// so a configured interval is actually resolvable; Max is one day. Default 30.
+const (
+	squadHeartbeatIntervalDefaultMinutes = 30
+	squadHeartbeatIntervalMinMinutes     = 5
+	squadHeartbeatIntervalMaxMinutes     = 1440
+)
+
 type SquadResponse struct {
 	ID            string                       `json:"id"`
 	WorkspaceID   string                       `json:"workspace_id"`
 	Name          string                       `json:"name"`
 	Description   string                       `json:"description"`
 	Instructions  string                       `json:"instructions"`
+	HeartbeatIntervalMinutes int                `json:"heartbeat_interval_minutes"`
 	AvatarURL     *string                      `json:"avatar_url"`
 	LeaderID      string                       `json:"leader_id"`
 	CreatorID     string                       `json:"creator_id"`
@@ -65,6 +76,7 @@ func squadToResponse(s db.Squad) SquadResponse {
 		Name:          s.Name,
 		Description:   s.Description,
 		Instructions:  s.Instructions,
+		HeartbeatIntervalMinutes: int(s.HeartbeatIntervalMinutes),
 		AvatarURL:     textToPtr(s.AvatarUrl),
 		LeaderID:      uuidToString(s.LeaderID),
 		CreatorID:     uuidToString(s.CreatorID),
@@ -356,6 +368,10 @@ func (h *Handler) UpdateSquad(w http.ResponseWriter, r *http.Request) {
 		Instructions *string `json:"instructions"`
 		LeaderID     *string `json:"leader_id"`
 		AvatarURL    *string `json:"avatar_url"`
+		// HeartbeatIntervalMinutes, in minutes, drives the periodic
+		// squad_heartbeat_inspect cadence for this squad. Pointer so an
+		// absent field is a no-op (COALESCE keeps the stored value).
+		HeartbeatIntervalMinutes *int `json:"heartbeat_interval_minutes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -374,6 +390,13 @@ func (h *Handler) UpdateSquad(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AvatarURL != nil {
 		params.AvatarUrl = pgtype.Text{String: *req.AvatarURL, Valid: true}
+	}
+	if req.HeartbeatIntervalMinutes != nil {
+		if *req.HeartbeatIntervalMinutes < squadHeartbeatIntervalMinMinutes || *req.HeartbeatIntervalMinutes > squadHeartbeatIntervalMaxMinutes {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("heartbeat_interval_minutes must be between %d and %d", squadHeartbeatIntervalMinMinutes, squadHeartbeatIntervalMaxMinutes))
+			return
+		}
+		params.HeartbeatIntervalMinutes = pgtype.Int4{Int32: int32(*req.HeartbeatIntervalMinutes), Valid: true}
 	}
 	if req.LeaderID != nil {
 		lid, ok := parseUUIDOrBadRequest(w, *req.LeaderID, "leader_id")
@@ -687,6 +710,128 @@ func (h *Handler) ListSquadMemberStatus(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// SquadInspectionHistoryEntry is one leader evaluation record — i.e. one
+// wake-up of the squad leader (by the periodic inspector, the terminal-state
+// hook, an @mention, or an assign) and the outcome it recorded.
+type SquadInspectionHistoryEntry struct {
+	ID          string `json:"id"`
+	IssueID     string `json:"issue_id"`
+	IssueNumber *int32 `json:"issue_number"`
+	IssueTitle  string `json:"issue_title"`
+	IssueStatus string `json:"issue_status"`
+	Outcome     string `json:"outcome"` // action | no_action | failed
+	Reason      string `json:"reason"`
+	CreatedAt   string `json:"created_at"`
+	DurationMs  *int64 `json:"duration_ms"`  // completed_at - started_at; nil if unknown
+	Verified    *bool  `json:"verified"`    // only set on outcome=action rows written
+	                                        // after dispatch verification shipped. nil on
+	                                        // legacy rows and no_action/failed → treat as
+	                                        // verified. False = leader claimed action but
+	                                        // no member task was spawned that turn.
+}
+
+// SquadInspectionHistoryResponse is the payload for the read-only
+// "Inspections" panel on the squad detail page.
+type SquadInspectionHistoryResponse struct {
+	Entries []SquadInspectionHistoryEntry `json:"entries"`
+}
+
+// ListSquadHealthInspectionHistory returns this squad leader's evaluation
+// history. Read-only; any workspace member can read it (the workspace-member
+// route middleware already gates access, same as ListSquadMemberStatus).
+func (h *Handler) ListSquadHealthInspectionHistory(w http.ResponseWriter, r *http.Request) {
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+
+	rows, err := h.Queries.ListSquadLeaderEvaluations(r.Context(), db.ListSquadLeaderEvaluationsParams{
+		ActorID:   squad.LeaderID,
+		SquadID:   util.UUIDToString(squad.ID),
+		LimitRows: 50,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list inspection history")
+		return
+	}
+
+	entries := make([]SquadInspectionHistoryEntry, 0, len(rows))
+	for _, row := range rows {
+		entry := SquadInspectionHistoryEntry{
+			ID:          uuidToString(row.ID),
+			IssueID:     uuidToString(row.IssueID),
+			IssueTitle:  row.IssueTitle.String,
+			IssueStatus: row.IssueStatus.String,
+			Outcome:     jsonTextValue(row.Outcome),
+			Reason:      jsonTextValue(row.Reason),
+			CreatedAt:   timestampToString(row.CreatedAt),
+		}
+		if row.IssueNumber.Valid {
+			n := row.IssueNumber.Int32
+			entry.IssueNumber = &n
+		}
+		if row.TaskStartedAt.Valid && row.TaskCompletedAt.Valid {
+			dur := row.TaskCompletedAt.Time.Sub(row.TaskStartedAt.Time).Milliseconds()
+			entry.DurationMs = &dur
+		}
+		if v, ok := jsonBoolPtr(row.Verified); ok {
+			entry.Verified = v
+		}
+		entries = append(entries, entry)
+	}
+
+	writeJSON(w, http.StatusOK, SquadInspectionHistoryResponse{Entries: entries})
+}
+
+// jsonTextValue coerces a `details->>'key'` projection (typed by sqlc as
+// interface{}) into a string. The pgx driver decodes text-from-jsonb as
+// either string or []byte depending on path; handle both plus nil.
+func jsonTextValue(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	default:
+		return ""
+	}
+}
+
+// jsonBoolPtr coerces a `details->>'key'` projection (sqlc-typed as
+// interface{}) into a *bool. Returns (nil, false) when the JSONB key is
+// absent (legacy rows, or no_action/failed outcomes that carry no verified
+// flag) so the caller can omit the field and let readers treat missing as
+// verified. Only present values are turned into a concrete *bool.
+func jsonBoolPtr(v interface{}) (*bool, bool) {
+	switch t := v.(type) {
+	case nil:
+		return nil, false
+	case string:
+		if t == "true" {
+			b := true
+			return &b, true
+		}
+		if t == "false" {
+			b := false
+			return &b, true
+		}
+		return nil, false
+	case []byte:
+		s := string(t)
+		if s == "true" {
+			b := true
+			return &b, true
+		}
+		if s == "false" {
+			b := false
+			return &b, true
+		}
+		return nil, false
+	default:
+		return nil, false
+	}
+}
+
 func (h *Handler) AddSquadMember(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "workspaceId")
 	member, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found")
@@ -940,20 +1085,49 @@ func (h *Handler) RecordSquadLeaderEvaluation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	details, _ := json.Marshal(map[string]string{
+	// Verify the claimed outcome against real downstream work. A leader can
+	// self-report `action` after a purely coordinative turn (summarising,
+	// requesting approval) that dispatched no member — that reads as a false
+	// "action taken" in the Inspections panel. When the leader claims action,
+	// count member tasks spawned on this issue or its direct children since
+	// the task started. If none exist, mark the row `verified=false` so the
+	// UI can distinguish a real dispatch from a self-reported one. We do NOT
+	// reject the request: the leader's reason is still recorded for audit.
+	// `no_action` / `failed` outcomes carry no verified flag (NULL ⇒ treated
+	// as verified by the reader, matching legacy rows).
+	details := map[string]any{
 		"squad_id": uuidToString(squad.ID),
 		"task_id":  util.UUIDToString(taskUUID),
 		"outcome":  req.Outcome,
 		"reason":   req.Reason,
-	})
+	}
+	if req.Outcome == "action" {
+		since := task.CreatedAt.Time
+		if task.StartedAt.Valid {
+			since = task.StartedAt.Time
+		}
+		count, qErr := h.Queries.CountDispatchedMemberTasksForIssueSubtree(r.Context(), db.CountDispatchedMemberTasksForIssueSubtreeParams{
+			Since:    pgtype.Timestamptz{Time: since, Valid: true},
+			LeaderID: squad.LeaderID,
+			IssueID:  issue.ID,
+		})
+		// Fail open: a transient DB error must not smear real dispatches as
+		// unverified. Only an actual zero count marks verified=false.
+		verified := true
+		if qErr == nil && count == 0 {
+			verified = false
+		}
+		details["verified"] = verified
+	}
 
+	detailsJSON, _ := json.Marshal(details)
 	activity, err := h.Queries.CreateActivity(r.Context(), db.CreateActivityParams{
 		WorkspaceID: issue.WorkspaceID,
 		IssueID:     issue.ID,
 		ActorType:   pgtype.Text{String: "agent", Valid: true},
 		ActorID:     squad.LeaderID,
 		Action:      "squad_leader_evaluated",
-		Details:     details,
+		Details:     detailsJSON,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record evaluation")
@@ -968,7 +1142,7 @@ func (h *Handler) RecordSquadLeaderEvaluation(w http.ResponseWriter, r *http.Req
 			"actor_type": "agent",
 			"actor_id":   actorID,
 			"action":     activity.Action,
-			"details":    json.RawMessage(details),
+			"details":    json.RawMessage(detailsJSON),
 			"created_at": timestampToString(activity.CreatedAt),
 		},
 	})

@@ -75,10 +75,20 @@ multica squad activity <issue-id> action|no_action|failed --reason "<why>" --out
 `activity` is a write: it records the leader's evaluation decision on an issue.
 Use it only when acting as the squad leader after evaluating a trigger.
 
-Write `--reason` in the same language as the issue's title and its recent
-comments (e.g. 简体中文 for a Chinese issue). The reason is shown verbatim on
-the squad "Inspections" panel for the whole team, so it must read naturally in
-the team's working language — keep it to one or two concise sentences.
+Write `--reason` in the SAME language as the issue's title and its recent
+comments — no exceptions, for every outcome (`action`, `no_action`, `failed`).
+Coordinative turns (no_action, summaries, approval requests) are NOT exempt;
+they are the most common source of wrong-language reasons. The reason is shown
+verbatim on the squad "Inspections" panel for the whole team, so an English
+reason on a Chinese issue is visible breakage. Keep it to one or two concise
+sentences.
+
+Use `action` ONLY when you actually dispatched a member this turn (an
+@mention delegation or a child issue assigned to a member). Coordinative
+turns with no dispatch — summarising, confirming progress, requesting
+approval — must be recorded as `no_action`. The backend verifies every
+`action` claim against real member dispatch and marks unverified ones on the
+Inspections panel.
 
 Issue/comment commands often needed with squads:
 
@@ -186,6 +196,28 @@ Squad mention format:
 Current behavior: resolve the squad, read `leader_id`, enqueue a leader task,
 and use the current comment as the trigger comment. It does not enqueue every
 squad member.
+
+## Periodic health and heartbeat behavior
+
+A squad leader is also woken automatically, without any human action, by two
+background schedulers:
+
+- **Stall detection** (`squad_health_inspect`): runs every 15 minutes. A
+  squad-assigned issue is "stalled" when a non-leader member has terminal work
+  (failed/cancelled/completed), no non-leader member is currently active on
+  it, and the leader has no queued/dispatched task. Each stalled issue enqueues
+  one leader follow-up.
+- **Periodic heartbeat** (`squad_heartbeat_inspect`): runs on a fixed base tick
+  and wakes the leader for any open (non-`done`/`cancelled`) squad-assigned
+  issue whose last `squad_leader_evaluated` activity is older than the squad's
+  configured `heartbeat_interval_minutes` (default 30, configurable on the
+  squad Inspections panel, range 5–1440 minutes), as long as the leader has no
+  queued/dispatched task. The leader re-evaluates and, if nothing is due,
+  records `no_action` (in the issue's language) and exits — most heartbeats
+  resolve to `no_action`, which is the system confirming the squad is healthy.
+
+Both paths enqueue via the same deduped leader-follow-up entry point, so a
+race between them cannot produce a duplicate wake-up.
 
 ## Autopilot behavior
 

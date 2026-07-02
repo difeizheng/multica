@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
-import type { Agent, Squad, Workspace } from "../types";
+import type { Agent, Squad, SquadInspectionHistoryResponse, Workspace } from "../types";
 
 export const workspaceKeys = {
   all: (wsId: string) => ["workspaces", wsId] as const,
@@ -15,6 +15,11 @@ export const workspaceKeys = {
   // `["workspaces", wsId, "squads"]` invalidation covers it.
   squadMemberStatus: (wsId: string, squadId: string) =>
     ["workspaces", wsId, "squads", squadId, "members-status"] as const,
+  // Per-squad leader inspection (wake-up + evaluation) history. Same key-tree
+  // placement as members-status so workspace switches and the broad squad
+  // invalidation in use-realtime-sync cover it.
+  squadInspectionHistory: (wsId: string, squadId: string) =>
+    ["workspaces", wsId, "squads", squadId, "inspection-history"] as const,
   skills: (wsId: string) => ["workspaces", wsId, "skills"] as const,
   assigneeFrequency: (wsId: string) => ["workspaces", wsId, "assignee-frequency"] as const,
 };
@@ -65,6 +70,19 @@ export function squadMemberStatusOptions(wsId: string, squadId: string) {
   return queryOptions({
     queryKey: workspaceKeys.squadMemberStatus(wsId, squadId),
     queryFn: () => api.getSquadMemberStatus(squadId),
+    enabled: !!wsId && !!squadId,
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+// Leader inspection history for the read-only "Inspections" tab. Same freshness
+// model as members-status: realtime invalidation is the primary signal, the
+// staleTime / refetchOnWindowFocus are safety nets.
+export function squadInspectionHistoryOptions(wsId: string, squadId: string) {
+  return queryOptions<SquadInspectionHistoryResponse>({
+    queryKey: workspaceKeys.squadInspectionHistory(wsId, squadId),
+    queryFn: () => api.getSquadInspectionHistory(squadId),
     enabled: !!wsId && !!squadId,
     staleTime: 30 * 1000,
     refetchOnWindowFocus: true,

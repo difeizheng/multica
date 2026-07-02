@@ -116,6 +116,131 @@ func countAgentCommentsForIssue(t *testing.T, issueID, agentID string) int {
 	return count
 }
 
+// latestSquadLeaderEvaluationDetails loads the most recent squad_leader_evaluated
+// activity row for an issue and returns its JSONB details as a map. Used to
+// assert on the `verified` flag written by RecordSquadLeaderEvaluation.
+func latestSquadLeaderEvaluationDetails(t *testing.T, issueID string) map[string]any {
+	t.Helper()
+	var details []byte
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT details FROM activity_log
+		WHERE issue_id = $1 AND action = 'squad_leader_evaluated'
+		ORDER BY created_at DESC, id DESC LIMIT 1
+	`, issueID).Scan(&details); err != nil {
+		t.Fatalf("load latest squad_leader_evaluated activity: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(details, &m); err != nil {
+		t.Fatalf("unmarshal activity details: %v", err)
+	}
+	return m
+}
+
+// insertMemberTaskOnChildIssue simulates the downstream effect of a real
+// leader dispatch: a child issue assigned to a member agent, plus the
+// agent_task_queue row that the assignment enqueues. The row's created_at
+// lands inside the leader task's [started_at, now] window so the verification
+// count query picks it up.
+func insertMemberTaskOnChildIssue(t *testing.T, parentIssueID, memberAgentID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT runtime_id FROM agent WHERE id = $1
+	`, memberAgentID).Scan(&runtimeID); err != nil {
+		t.Fatalf("load member runtime: %v", err)
+	}
+
+	var childID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, creator_type, creator_id, title,
+		                   assignee_type, assignee_id, parent_issue_id)
+		VALUES ($1, 'member', $2, 'child dispatch', 'agent', $3, $4)
+		RETURNING id
+	`, testWorkspaceID, testUserID, memberAgentID, parentIssueID).Scan(&childID); err != nil {
+		t.Fatalf("create child issue: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, childID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, 'queued', 0)
+	`, memberAgentID, runtimeID, childID); err != nil {
+		t.Fatalf("create member task on child issue: %v", err)
+	}
+}
+
+// TestRecordSquadLeaderEvaluation_ActionWithoutDispatchIsUnverified encodes
+// the core fix: a leader that records `action` without spawning any member
+// task this turn must be marked verified=false so the Inspections panel can
+// distinguish a real dispatch from a self-reported coordinative turn.
+func TestRecordSquadLeaderEvaluation_ActionWithoutDispatchIsUnverified(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fx := newRunningSquadLeaderTaskFixture(t)
+
+	recordSquadLeaderEvaluationForTask(t, fx, "action")
+
+	details := latestSquadLeaderEvaluationDetails(t, fx.IssueID)
+	got, ok := details["verified"]
+	if !ok {
+		t.Fatalf("expected verified key on action evaluation details, got %v", details)
+	}
+	if got != false {
+		t.Fatalf("expected verified=false for action with no member dispatch, got %v", got)
+	}
+}
+
+// TestRecordSquadLeaderEvaluation_ActionWithChildIssueDispatchIsVerified
+// confirms that a real dispatch (a child issue assigned to a non-leader
+// member, which enqueues a member agent_task_queue row in the task window)
+// marks the evaluation verified=true.
+func TestRecordSquadLeaderEvaluation_ActionWithChildIssueDispatchIsVerified(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fx := newRunningSquadLeaderTaskFixture(t)
+	memberID := createHandlerTestAgent(t, "Verified Dispatch Member", nil)
+	// Make the member a squad member so the dispatch is realistic; the
+	// verification query only filters by agent_id <> leader_id, but keeping
+	// the squad roster honest avoids surprising future readers.
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO squad_member (squad_id, member_type, member_id, role)
+		SELECT squad.assignee_id, 'agent', $1, '' FROM issue WHERE id = $2
+	`, memberID, fx.IssueID); err != nil {
+		t.Fatalf("add squad member: %v", err)
+	}
+
+	insertMemberTaskOnChildIssue(t, fx.IssueID, memberID)
+	recordSquadLeaderEvaluationForTask(t, fx, "action")
+
+	details := latestSquadLeaderEvaluationDetails(t, fx.IssueID)
+	if got := details["verified"]; got != true {
+		t.Fatalf("expected verified=true when a member task exists in window, got %v", got)
+	}
+}
+
+// TestRecordSquadLeaderEvaluation_NoActionHasNoVerifiedFlag ensures the
+// verified flag is only attached to outcome=action rows — no_action and
+// failed outcomes leave it absent so legacy readers treat them as verified.
+func TestRecordSquadLeaderEvaluation_NoActionHasNoVerifiedFlag(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fx := newRunningSquadLeaderTaskFixture(t)
+
+	recordSquadLeaderEvaluationForTask(t, fx, "no_action")
+
+	details := latestSquadLeaderEvaluationDetails(t, fx.IssueID)
+	if _, ok := details["verified"]; ok {
+		t.Fatalf("expected no verified key on no_action evaluation, got %v", details)
+	}
+}
+
 func TestCompleteTask_SquadLeaderNoActionDoesNotSynthesizeComment(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

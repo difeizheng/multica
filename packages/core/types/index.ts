@@ -190,6 +190,8 @@ export type {
   SquadActiveIssueBrief,
   SquadMemberStatus,
   SquadMemberStatusListResponse,
+  SquadInspectionRecord,
+  SquadInspectionHistoryResponse,
 } from "./squad";
 export type {
   BillingBalance,

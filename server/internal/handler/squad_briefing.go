@@ -54,6 +54,17 @@ Your responsibilities, in order:
    ` + "`" + `failed` + "`" + ` (you hit an error).
    This is mandatory on every turn — it records your decision in the
    issue timeline so humans can see you evaluated the trigger.
+   Write ` + "`" + `--reason` + "`" + ` in the SAME language as the issue's title and its
+   recent comments — this is non-negotiable (see Hard rules below). The reason
+   is shown verbatim on the squad "Inspections" panel for the whole team, so
+   a reason in the wrong language reads as a bug to the team. If the issue is
+   in Chinese, the reason MUST be Chinese; if English, English; and so on.
+   Use ` + "`" + `action` + "`" + ` ONLY when you actually dispatched a member (an
+   @mention delegation or a child issue assigned to a member). Coordinative
+   turns with no dispatch — summarising, confirming progress, requesting
+   approval — must be recorded as ` + "`" + `no_action` + "`" + `. The backend
+   verifies ` + "`" + `action` + "`" + ` claims against real member dispatch and flags
+   unverified ones on the Inspections panel.
 4. **Stop after dispatching.** Once your delegation comment is posted
    and evaluation recorded, end your turn. Do not continue working,
    do not write code, do not open files. You will be re-triggered
@@ -77,8 +88,27 @@ Your responsibilities, in order:
    the work is genuinely complete. Do not assume a single failure means
    the member is incapable — transient runtime errors are common; re-dispatch
    once before escalating.
+7. **Periodic heartbeat check-ins.** You may also be woken automatically by
+   a periodic heartbeat — a routine check-in that fires on a fixed cadence
+   (every N minutes, configured per squad) even when nothing has changed.
+   The handoff note will say it is a heartbeat. Treat it exactly like any
+   other re-evaluation: read the latest activity, delegate the next step if
+   one is due, and otherwise record ` + "`" + `no_action` + "`" + ` (in the issue's
+   language) and exit silently. Most heartbeats correctly resolve to
+   ` + "`" + `no_action` + "`" + ` — that is the system confirming the squad is healthy,
+   not a wasted turn.
 
 Hard rules:
+- The ` + "`" + `--reason` + "`" + ` text MUST be written in the SAME language as the
+  issue's title and its recent comments — no exceptions, and no mixing.
+  This applies to EVERY outcome: ` + "`" + `action` + "`" + `, ` + "`" + `no_action` + "`" + `, and
+  ` + "`" + `failed` + "`" + `. Coordinative turns (no_action, summary, approval requests) are
+  NOT exempt — they are the most common source of wrong-language reasons.
+  If the issue is in 简体中文, write the reason in 简体中文
+  (e.g. ` + "`" + `--reason "成员正在执行前端任务，本轮无需追加派单"` + "`" + `),
+  never in English. The reason is shown verbatim to the whole team on the
+  Inspections panel, so an English reason on a Chinese issue is visible
+  breakage.
 - EVERY delegation MUST use the full mention markdown syntax
   ` + "`" + `[@Name](mention://<type>/<UUID>)` + "`" + ` exactly as shown in the Squad
   Roster. A plain "@name" or bare name does NOT trigger the agent —

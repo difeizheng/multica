@@ -58,6 +58,36 @@ func (q *Queries) CountAssigneeChangesByActor(ctx context.Context, arg CountAssi
 	return items, nil
 }
 
+const countDispatchedMemberTasksForIssueSubtree = `-- name: CountDispatchedMemberTasksForIssueSubtree :one
+SELECT COUNT(*)::int
+FROM agent_task_queue t
+WHERE t.created_at >= $1
+  AND t.agent_id <> $2
+  AND (
+    t.issue_id = $3
+    OR t.issue_id IN (SELECT id FROM issue WHERE parent_issue_id = $3)
+  )
+`
+
+type CountDispatchedMemberTasksForIssueSubtreeParams struct {
+	Since    pgtype.Timestamptz `json:"since"`
+	LeaderID pgtype.UUID        `json:"leader_id"`
+	IssueID  pgtype.UUID        `json:"issue_id"`
+}
+
+// Counts member tasks spawned on an issue OR its direct children during the
+// half-open window [since, now]. Used by RecordSquadLeaderEvaluation to
+// verify that an `outcome=action` claim actually produced downstream member
+// work (either an @mention dispatch on this issue or a child issue created
+// and assigned to an agent/member). The leader agent itself is excluded so
+// its own coordination runs do not count as a dispatch.
+func (q *Queries) CountDispatchedMemberTasksForIssueSubtree(ctx context.Context, arg CountDispatchedMemberTasksForIssueSubtreeParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countDispatchedMemberTasksForIssueSubtree, arg.Since, arg.LeaderID, arg.IssueID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createActivity = `-- name: CreateActivity :one
 INSERT INTO activity_log (
     workspace_id, issue_id, actor_type, actor_id, action, details
@@ -176,6 +206,166 @@ func (q *Queries) ListActivitiesForIssue(ctx context.Context, arg ListActivities
 			&i.Action,
 			&i.Details,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSquadHeartbeatDueIssues = `-- name: ListSquadHeartbeatDueIssues :many
+SELECT
+    s.id            AS squad_id,
+    s.leader_id     AS leader_id,
+    i.id            AS issue_id,
+    i.workspace_id  AS workspace_id
+FROM squad s
+JOIN issue i
+       ON i.assignee_type = 'squad'
+      AND i.assignee_id = s.id
+LEFT JOIN (
+    SELECT issue_id, actor_id, MAX(created_at) AS last_eval_at
+    FROM activity_log
+    WHERE action = 'squad_leader_evaluated'
+      AND created_at > now() - interval '7 days'
+    GROUP BY issue_id, actor_id
+) le ON le.issue_id = i.id AND le.actor_id = s.leader_id
+WHERE s.archived_at IS NULL
+  AND s.leader_id IS NOT NULL
+  AND i.status NOT IN ('done', 'cancelled')
+  AND (
+      le.last_eval_at IS NULL
+      OR le.last_eval_at < now() - (s.heartbeat_interval_minutes * interval '1 minute')
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue lt
+      WHERE lt.issue_id = i.id
+        AND lt.agent_id = s.leader_id
+        AND lt.status IN ('queued', 'dispatched')
+  )
+`
+
+type ListSquadHeartbeatDueIssuesRow struct {
+	SquadID     pgtype.UUID `json:"squad_id"`
+	LeaderID    pgtype.UUID `json:"leader_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Open squad-assigned issues whose leader is due for a periodic heartbeat
+// wake-up. A row is "due" when the leader has NO queued/dispatched task on the
+// issue AND either the leader has never evaluated it, or the most recent
+// squad_leader_evaluated activity for (issue, leader) is older than the squad's
+// configured heartbeat_interval_minutes.
+//
+// The last-evaluation lookup is a grouped LEFT JOIN over activity_log scoped to
+// the last 7 days. 7 days comfortably exceeds the max allowed interval
+// (1440 minutes = 1 day), so the window can never drop the row that determines
+// due-ness, while bounding the grouped scan. Drives the periodic
+// squad_heartbeat_inspect scheduler job.
+func (q *Queries) ListSquadHeartbeatDueIssues(ctx context.Context) ([]ListSquadHeartbeatDueIssuesRow, error) {
+	rows, err := q.db.Query(ctx, listSquadHeartbeatDueIssues)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSquadHeartbeatDueIssuesRow{}
+	for rows.Next() {
+		var i ListSquadHeartbeatDueIssuesRow
+		if err := rows.Scan(
+			&i.SquadID,
+			&i.LeaderID,
+			&i.IssueID,
+			&i.WorkspaceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSquadLeaderEvaluations = `-- name: ListSquadLeaderEvaluations :many
+SELECT
+  a.id,
+  a.created_at,
+  a.issue_id,
+  i.number   AS issue_number,
+  i.title    AS issue_title,
+  i.status   AS issue_status,
+  a.details->>'outcome'  AS outcome,
+  a.details->>'reason'   AS reason,
+  -- ` + "`" + `verified` + "`" + ` is only present on outcome=action rows written after the
+  -- dispatch-verification feature shipped. NULL for legacy rows and for
+  -- no_action/failed outcomes; the handler treats NULL as verified=true so
+  -- historical data is not flagged.
+  a.details->>'verified' AS verified,
+  t.started_at   AS task_started_at,
+  t.completed_at AS task_completed_at
+FROM activity_log a
+LEFT JOIN issue i ON i.id = a.issue_id
+LEFT JOIN agent_task_queue t ON t.id::text = a.details->>'task_id'
+WHERE a.actor_id = $1
+  AND a.action = 'squad_leader_evaluated'
+  AND a.details->>'squad_id' = $2::text
+ORDER BY a.created_at DESC
+LIMIT $3
+`
+
+type ListSquadLeaderEvaluationsParams struct {
+	ActorID   pgtype.UUID `json:"actor_id"`
+	SquadID   string      `json:"squad_id"`
+	LimitRows int32       `json:"limit_rows"`
+}
+
+type ListSquadLeaderEvaluationsRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	IssueNumber     pgtype.Int4        `json:"issue_number"`
+	IssueTitle      pgtype.Text        `json:"issue_title"`
+	IssueStatus     pgtype.Text        `json:"issue_status"`
+	Outcome         interface{}        `json:"outcome"`
+	Reason          interface{}        `json:"reason"`
+	Verified        interface{}        `json:"verified"`
+	TaskStartedAt   pgtype.Timestamptz `json:"task_started_at"`
+	TaskCompletedAt pgtype.Timestamptz `json:"task_completed_at"`
+}
+
+// A squad leader's evaluation history: one row per squad_leader_evaluated
+// activity recorded by this squad's leader. Each row is a leader wake-up
+// (whether triggered by the periodic inspector, the terminal-state hook, an
+// @mention, or an assign). Drives the read-only "Inspections" panel.
+// JOIN issue for title/number; LEFT JOIN agent_task_queue (via the task_id
+// stored in details JSON) for the run duration.
+func (q *Queries) ListSquadLeaderEvaluations(ctx context.Context, arg ListSquadLeaderEvaluationsParams) ([]ListSquadLeaderEvaluationsRow, error) {
+	rows, err := q.db.Query(ctx, listSquadLeaderEvaluations, arg.ActorID, arg.SquadID, arg.LimitRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSquadLeaderEvaluationsRow{}
+	for rows.Next() {
+		var i ListSquadLeaderEvaluationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.IssueID,
+			&i.IssueNumber,
+			&i.IssueTitle,
+			&i.IssueStatus,
+			&i.Outcome,
+			&i.Reason,
+			&i.Verified,
+			&i.TaskStartedAt,
+			&i.TaskCompletedAt,
 		); err != nil {
 			return nil, err
 		}

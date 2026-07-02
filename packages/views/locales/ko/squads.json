@@ -85,6 +85,8 @@
     "tab_label": "점검",
     "section_title": "리더 점검 기록",
     "outcome_action": "조치함",
+    "outcome_action_unverified": "미확인",
+    "outcome_action_unverified_hint": "리더가 ‘조치함’으로 기록했지만 이번 회차에 실제 멤버 파견이 감지되지 않았습니다(요약이나 승인 요청만 했을 수 있음).",
     "outcome_no_action": "조치 불필요",
     "outcome_failed": "실패",
     "empty_state": "아직 점검 기록이 없습니다",
@@ -97,7 +99,13 @@
     "rhythm_dispatched": "재할당",
     "rhythm_failed": "실패",
     "events_count_one": "{{count}}회",
-    "events_count_other": "{{count}}회"
+    "events_count_other": "{{count}}회",
+    "interval_label": "점검 주기",
+    "interval_suffix": "분",
+    "interval_save_button": "저장",
+    "interval_hint": "범위 {{min}}–{{max}}분(기본값 30). 이 시간이 지나면 열려 있는 각 issue를 리더가 자동으로 다시 점검합니다.",
+    "interval_saved": "점검 주기를 업데이트했습니다",
+    "interval_error": "{{min}}~{{max}} 사이의 정수를 입력하세요"
   },
   "scope": {
     "mine": "내 스쿼드",
