@@ -19,13 +19,13 @@ const JobNameSquadHeartbeatInspect = "squad_heartbeat_inspect"
 
 // squadHeartbeatFollowupReason is the handoff note attached to every leader
 // task produced by the periodic heartbeat. The leader sees this in its opening
-// context. It tells the leader this is a routine check-in (not a stall, not an
-// @mention), so it re-evaluates and — when nothing is due — records a no_action
-// evaluation (written in the issue's language) and exits. Kept English to match
-// the squadOperatingProtocol convention (the protocol text is English-only);
-// the team-facing reason the leader records is governed by the protocol's
-// language hard rule, not by this note.
-const squadHeartbeatFollowupReason = "Squad heartbeat: this is a routine periodic check-in (no member reported a stall or asked a question). Re-read the latest activity on the issue. If a next step is due, delegate it; otherwise record a no_action evaluation and end your turn."
+// context. A heartbeat does NOT mean "all is well" — it tells the leader to
+// verify actual member progress and, if members are idle while the issue is
+// still open, treat that as a stall and re-dispatch (action), not no_action.
+// Kept English to match the squadOperatingProtocol convention (protocol text is
+// English-only); the team-facing reason the leader records is governed by the
+// protocol's language hard rule, not by this note.
+const squadHeartbeatFollowupReason = "Squad heartbeat: periodic check-in. Do NOT assume everything is fine. Verify the squad's actual progress: check when each member LAST produced work (a completed task, a comment, a status or code change). If a member is currently working or produced work within the last working step, record no_action. But if no member is currently working and no member has produced anything recently while the issue is still open, the work has stalled — re-dispatch the next step to the right member now (this is an action, not a no_action), exactly as you would for a stall. Never record no_action for an open issue whose members are all idle."
 
 // squadHeartbeatStore is the narrow read contract the heartbeat inspector
 // needs from the DB layer. *db.Queries satisfies it structurally. Defined here

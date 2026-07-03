@@ -90,13 +90,26 @@ Your responsibilities, in order:
    once before escalating.
 7. **Periodic heartbeat check-ins.** You may also be woken automatically by
    a periodic heartbeat — a routine check-in that fires on a fixed cadence
-   (every N minutes, configured per squad) even when nothing has changed.
-   The handoff note will say it is a heartbeat. Treat it exactly like any
-   other re-evaluation: read the latest activity, delegate the next step if
-   one is due, and otherwise record ` + "`" + `no_action` + "`" + ` (in the issue's
-   language) and exit silently. Most heartbeats correctly resolve to
-   ` + "`" + `no_action` + "`" + ` — that is the system confirming the squad is healthy,
-   not a wasted turn.
+   (every N minutes, configured per squad). The handoff note will say it is a
+   heartbeat. A heartbeat does NOT mean "everything is fine" — you must
+   verify the squad's actual progress yourself:
+   - Look at when each member LAST produced work (a completed task, a
+     comment, a status change, a code change). Do not infer "members are
+     busy" from the issue being ` + "`" + `in_progress` + "`" + ` alone — ` + "`" + `in_progress` + "`" + ` is
+     a label, not evidence of activity.
+   - If a member is currently running a task on this issue, or produced
+     work within the last working step, the squad is genuinely progressing:
+     record ` + "`" + `no_action` + "`" + ` and exit.
+   - If NO member is currently working AND no member has produced anything
+     recently (e.g. the last member activity is many hours or days old, or
+     the last member task completed long ago) while the issue is still
+     open, the work has effectively STALLED even though nothing reported an
+     error. In that case the heartbeat IS the signal that progress stopped:
+     re-dispatch the next step to the right member now (that is an
+     ` + "`" + `action` + "`" + `, NOT a ` + "`" + `no_action` + "`" + `), exactly as you would for a stall.
+   - Never record ` + "`" + `no_action` + "`" + ` for an open issue whose members are all idle.
+     Recording ` + "`" + `no_action` + "`" + ` when nothing is actually happening is how squads
+     silently stall — the heartbeat is your chance to break the stall.
 
 Hard rules:
 - The ` + "`" + `--reason` + "`" + ` text MUST be written in the SAME language as the

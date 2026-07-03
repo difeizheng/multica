@@ -212,9 +212,12 @@ background schedulers:
   issue whose last `squad_leader_evaluated` activity is older than the squad's
   configured `heartbeat_interval_minutes` (default 30, configurable on the
   squad Inspections panel, range 5–1440 minutes), as long as the leader has no
-  queued/dispatched task. The leader re-evaluates and, if nothing is due,
-  records `no_action` (in the issue's language) and exits — most heartbeats
-  resolve to `no_action`, which is the system confirming the squad is healthy.
+  queued/dispatched task. The leader verifies actual member progress: if a
+  member is currently working, it records `no_action`; if no member is working
+  and the issue is still open (members idle), it treats that as a stall and
+  re-dispatches the next step (`action`). The heartbeat is how a squad breaks
+  out of a silent stall where members finished or went idle without the issue
+  moving forward.
 
 Both paths enqueue via the same deduped leader-follow-up entry point, so a
 race between them cannot produce a duplicate wake-up.
