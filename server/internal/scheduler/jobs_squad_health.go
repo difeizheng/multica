@@ -35,7 +35,10 @@ type SquadFollowUpper interface {
 // squadHealthFollowupReason is the handoff note attached to every
 // leader task produced by the inspector. The leader sees this in its
 // opening context and is expected to @mention a member to continue.
-const squadHealthFollowupReason = "Squad health check: this issue appears stalled (a member stopped and no one is actively working). Please review and @mention a member to continue."
+// squadHeartbeatLanguageReminder is appended so this English system note does
+// not pull the leader's team-facing --reason into English on Chinese issues;
+// RecordSquadLeaderEvaluation enforces it as a backstop regardless.
+const squadHealthFollowupReason = "Squad health check: this issue appears stalled (a member stopped and no one is actively working). Please review and @mention a member to continue." + squadHeartbeatLanguageReminder
 
 // squadHealthStore is the narrow read contract the inspector needs from the
 // DB layer. *db.Queries satisfies it. Defined here so the handler is

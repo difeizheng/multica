@@ -1027,6 +1027,21 @@ func (h *Handler) UpdateSquadMemberRole(w http.ResponseWriter, r *http.Request) 
 
 // ── Squad Leader Evaluation ──────────────────────────────────────────────────
 
+// hasCJK reports whether s contains at least one Han (CJK Unified Ideograph,
+// U+4E00..U+9FFF) rune. Used to classify an issue's language from its title
+// and to detect a leader --reason written in the wrong (Latin/English) script.
+// Han covers 简体中文 / 繁體中文 / kanji-han; for this product that maps to
+// "the issue is Chinese, so the reason must contain Chinese too". Hiragana/
+// katakana-only Japanese titles are out of scope (this product is Chinese).
+func hasCJK(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
+}
+
 // RecordSquadLeaderEvaluation records a squad leader's evaluation decision
 // into the unified activity_log. Called by the leader agent via CLI after
 // each trigger to record whether it took action, stayed silent, or failed.
@@ -1047,6 +1062,24 @@ func (h *Handler) RecordSquadLeaderEvaluation(w http.ResponseWriter, r *http.Req
 
 	if req.Outcome != "action" && req.Outcome != "no_action" && req.Outcome != "failed" {
 		writeError(w, http.StatusBadRequest, "outcome must be 'action', 'no_action', or 'failed'")
+		return
+	}
+
+	// Language enforcement. The squad operating protocol requires the leader's
+	// --reason to be in the same language as the issue (title). Prompt-level
+	// rules proved unreliable: under English-heavy context (API errors, technical
+	// reasoning, the leader's own prior English reasons) the LLM ignores them
+	// and records English reasons on Chinese issues, which reads as visible
+	// breakage on the Inspections panel. Enforce deterministically at the write
+	// boundary — every trigger path (heartbeat, health-check, @mention, assign)
+	// records through this handler, so one check covers all of them. A CJK
+	// (Han) titled issue must carry a reason with at least one CJK character;
+	// a reason with zero CJK on such an issue is English and is rejected with a
+	// directive message so the leader rewrites and retries. English-titled
+	// issues are unconstrained. See also the multica-squads conventions doc.
+	if hasCJK(issue.Title) && !hasCJK(req.Reason) {
+		writeError(w, http.StatusUnprocessableEntity,
+			"reason 语言与该 issue 不一致：issue 标题为简体中文，--reason 必须使用简体中文（至少包含中文字符）。请用简体中文重写 --reason 后再次调用，不要使用英文。")
 		return
 	}
 

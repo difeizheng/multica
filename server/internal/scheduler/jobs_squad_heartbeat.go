@@ -17,13 +17,24 @@ import (
 // would orphan historic rows.
 const JobNameSquadHeartbeatInspect = "squad_heartbeat_inspect"
 
+// squadHeartbeatLanguageReminder is appended to EVERY heartbeat handoff note.
+// The handoff itself is English (system convention), and this strong,
+// data-rich English context was observed to pull the leader's team-facing
+// --reason into English even on Chinese issues — a regression introduced when
+// the heartbeat started injecting a forceful English verdict. The reminder
+// sits at the END of the note on purpose: recency primes the leader's next
+// output, and the next output is the --reason. It explicitly names English as
+// the wrong choice so the leader does not carry the handoff's language over.
+const squadHeartbeatLanguageReminder = "\n\nLANGUAGE (mandatory): this handoff is in English for system reasons, but your `--reason` MUST be written in the issue's OWN language — 简体中文 if the issue is Chinese, English only if the issue is English, and so on. Do NOT write the reason in English just because this handoff is in English. An English reason on a Chinese issue is visible breakage on the Inspections panel."
+
 // squadHeartbeatFallbackNote is the handoff note used when the per-issue
 // telemetry query fails. A telemetry failure must never block the wake-up —
 // the leader is still woken and pushed to verify progress itself, exactly as
 // it was before telemetry-driven verdicts existed. Kept English to match the
 // squadOperatingProtocol convention (protocol/handoff text is English-only;
-// the team-facing --reason the leader records is localized separately).
-const squadHeartbeatFallbackNote = "Squad heartbeat: periodic check-in (telemetry unavailable). Verify the squad's actual progress yourself: check when each member LAST produced work via the task queue and recent activity. If no member is currently working and nothing has been produced recently while the issue is open, the work has STALLED — re-dispatch the next step now and record `action`, NOT `no_action`. Do not infer members are busy from the in_progress label alone."
+// the team-facing --reason the leader records is localized separately — see
+// squadHeartbeatLanguageReminder appended below).
+const squadHeartbeatFallbackNote = "Squad heartbeat: periodic check-in (telemetry unavailable). Verify the squad's actual progress yourself: check when each member LAST produced work via the task queue and recent activity. If no member is currently working and nothing has been produced recently while the issue is open, the work has STALLED — re-dispatch the next step now and record `action`, NOT `no_action`. Do not infer members are busy from the in_progress label alone." + squadHeartbeatLanguageReminder
 
 // squadHeartbeatTelemetry is the per-issue member-task snapshot the heartbeat
 // uses to classify an open squad issue as STALLED vs PROGRESSING
@@ -83,13 +94,15 @@ func heartbeatHandoffNote(t squadHeartbeatTelemetry, now time.Time) string {
 			"Verdict: STALLED. No member is currently working and there is no recent member activity while the issue is still open. " +
 			"You MUST re-dispatch the next step to a suitable member now — post an @mention delegation OR create a `todo` child issue assigned to a member — and record outcome `action`. " +
 			"Do NOT record `no_action` and do NOT claim members are still working: the task queue above proves they are not. " +
-			"If the work is genuinely complete, close the issue instead of recording no_action."
+			"If the work is genuinely complete, close the issue instead of recording no_action." +
+			squadHeartbeatLanguageReminder
 	}
 	return "Squad heartbeat telemetry for this issue:\n" +
 		"- " + running + "\n" +
 		"- " + lastActivity + "\n" +
 		"Verdict: PROGRESSING. The squad is genuinely active. Record outcome `no_action` and exit, " +
-		"unless you spot a concrete next step that genuinely needs a new dispatch (in which case record `action`)."
+		"unless you spot a concrete next step that genuinely needs a new dispatch (in which case record `action`)." +
+		squadHeartbeatLanguageReminder
 }
 
 // ago formats a duration as a short human-readable relative string for the

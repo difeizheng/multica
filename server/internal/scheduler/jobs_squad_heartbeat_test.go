@@ -316,6 +316,59 @@ func TestSquadHeartbeatInspectHandler(t *testing.T) {
 		if !strings.Contains(follower.reasons[0], "telemetry unavailable") {
 			t.Fatalf("expected fallback note, got: %s", follower.reasons[0])
 		}
+		if !strings.Contains(follower.reasons[0], "LANGUAGE (mandatory)") {
+			t.Fatalf("fallback note must carry the language reminder, got: %s", follower.reasons[0])
+		}
+	})
+
+	// The handoff note is English and forcefully directive; without an
+	// explicit reminder it pulls the leader's team-facing --reason into English
+	// even on Chinese issues. Every heartbeat note (both verdicts AND the
+	// fallback) must carry the language reminder so the leader writes the
+	// reason in the issue's own language.
+	t.Run("every heartbeat note carries the language reminder", func(t *testing.T) {
+		r := squadHeartbeatRow("aaa")
+		check := func(t *testing.T, note string) {
+			t.Helper()
+			if !strings.Contains(note, "LANGUAGE (mandatory)") {
+				t.Errorf("note missing LANGUAGE marker:\n%s", note)
+			}
+			if !strings.Contains(note, "简体中文") {
+				t.Errorf("note must name 简体中文 as the Chinese-issue choice:\n%s", note)
+			}
+			if !strings.Contains(note, "English") {
+				t.Errorf("note must explicitly warn against English:\n%s", note)
+			}
+		}
+		// STALLED verdict note.
+		t.Run("stalled", func(t *testing.T) {
+			store := &fakeSquadHeartbeatStore{
+				candidates: []db.ListSquadHeartbeatDueIssuesRow{r},
+				issues:     map[pgtype.UUID]db.Issue{r.IssueID: {ID: r.IssueID}},
+			}
+			f := &fakeFollower{}
+			makeSquadHeartbeatInspectHandler(store, f)(context.Background(), HandlerInput{})
+			if len(f.reasons) != 1 {
+				t.Fatalf("expected 1 reason, got %d", len(f.reasons))
+			}
+			check(t, f.reasons[0])
+		})
+		// PROGRESSING verdict note.
+		t.Run("progressing", func(t *testing.T) {
+			store := &fakeSquadHeartbeatStore{
+				candidates: []db.ListSquadHeartbeatDueIssuesRow{r},
+				issues:     map[pgtype.UUID]db.Issue{r.IssueID: {ID: r.IssueID}},
+				telemetry: map[pgtype.UUID]db.GetSquadHeartbeatMemberActivityRow{
+					r.IssueID: {RunningMemberTasks: 1},
+				},
+			}
+			f := &fakeFollower{}
+			makeSquadHeartbeatInspectHandler(store, f)(context.Background(), HandlerInput{})
+			if len(f.reasons) != 1 {
+				t.Fatalf("expected 1 reason, got %d", len(f.reasons))
+			}
+			check(t, f.reasons[0])
+		})
 	})
 }
 
