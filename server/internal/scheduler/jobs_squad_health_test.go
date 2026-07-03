@@ -43,6 +43,7 @@ func (f *fakeSquadHealthStore) GetIssue(ctx context.Context, id pgtype.UUID) (db
 // fakeFollower records every EnqueueSquadLeaderFollowUp call.
 type fakeFollower struct {
 	enqueued []pgtype.UUID // issue IDs that were enqueued
+	reasons  []string      // handoff note passed per enqueue, parallel to enqueued
 	failOn   map[pgtype.UUID]error
 }
 
@@ -53,6 +54,7 @@ func (f *fakeFollower) EnqueueSquadLeaderFollowUp(ctx context.Context, issue db.
 		}
 	}
 	f.enqueued = append(f.enqueued, issue.ID)
+	f.reasons = append(f.reasons, reason)
 	return true, nil
 }
 

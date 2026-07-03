@@ -17,15 +17,94 @@ import (
 // would orphan historic rows.
 const JobNameSquadHeartbeatInspect = "squad_heartbeat_inspect"
 
-// squadHeartbeatFollowupReason is the handoff note attached to every leader
-// task produced by the periodic heartbeat. The leader sees this in its opening
-// context. A heartbeat does NOT mean "all is well" — it tells the leader to
-// verify actual member progress and, if members are idle while the issue is
-// still open, treat that as a stall and re-dispatch (action), not no_action.
-// Kept English to match the squadOperatingProtocol convention (protocol text is
-// English-only); the team-facing reason the leader records is governed by the
-// protocol's language hard rule, not by this note.
-const squadHeartbeatFollowupReason = "Squad heartbeat: periodic check-in. Do NOT assume everything is fine. Verify the squad's actual progress: check when each member LAST produced work (a completed task, a comment, a status or code change). If a member is currently working or produced work within the last working step, record no_action. But if no member is currently working and no member has produced anything recently while the issue is still open, the work has stalled — re-dispatch the next step to the right member now (this is an action, not a no_action), exactly as you would for a stall. Never record no_action for an open issue whose members are all idle."
+// squadHeartbeatFallbackNote is the handoff note used when the per-issue
+// telemetry query fails. A telemetry failure must never block the wake-up —
+// the leader is still woken and pushed to verify progress itself, exactly as
+// it was before telemetry-driven verdicts existed. Kept English to match the
+// squadOperatingProtocol convention (protocol/handoff text is English-only;
+// the team-facing --reason the leader records is localized separately).
+const squadHeartbeatFallbackNote = "Squad heartbeat: periodic check-in (telemetry unavailable). Verify the squad's actual progress yourself: check when each member LAST produced work via the task queue and recent activity. If no member is currently working and nothing has been produced recently while the issue is open, the work has STALLED — re-dispatch the next step now and record `action`, NOT `no_action`. Do not infer members are busy from the in_progress label alone."
+
+// squadHeartbeatTelemetry is the per-issue member-task snapshot the heartbeat
+// uses to classify an open squad issue as STALLED vs PROGRESSING
+// deterministically, instead of delegating that judgement to the leader LLM.
+// The leader has no view into agent_task_queue and, left to infer from the
+// in_progress label, systematically records no_action for idle squads — which
+// is the bug this struct exists to fix.
+type squadHeartbeatTelemetry struct {
+	// runningMemberTasks is the count of non-leader tasks on the issue (or
+	// its direct children) currently queued/dispatched — i.e. a member is
+	// actively working right now.
+	runningMemberTasks int32
+	// lastMemberTaskActivityAt is the most recent point any non-leader member
+	// task on the subtree was known alive (completion, start, or creation,
+	// in that order of preference). Valid=false when no non-leader member
+	// task has ever touched the subtree.
+	lastMemberTaskActivityAt pgtype.Timestamptz
+	// heartbeatInterval is the squad's configured cadence; the stall
+	// threshold for "no recent activity" is measured in multiples of it.
+	heartbeatInterval time.Duration
+}
+
+// stalled is the pure, testable classification behind the heartbeat verdict.
+// The burden of proof is on "progressing": an issue is stalled unless there is
+// positive evidence of current or recent member activity. This deliberately
+// inverts the leader LLM's default (which assumes busy from the in_progress
+// label) so that silent stalls are caught instead of rubber-stamped.
+//
+// A member task currently in queued/dispatched state counts as progressing
+// regardless of age — a genuinely hung task is the daemon's responsibility to
+// reap via its own task timeouts, not the heartbeat's.
+func (t squadHeartbeatTelemetry) stalled(now time.Time) bool {
+	if t.runningMemberTasks > 0 {
+		return false
+	}
+	if !t.lastMemberTaskActivityAt.Valid {
+		return true // no member has ever worked this issue
+	}
+	return now.Sub(t.lastMemberTaskActivityAt.Time) > t.heartbeatInterval
+}
+
+// heartbeatHandoffNote renders the dynamic handoff note for one issue. It
+// leads with the verdict and the raw telemetry so the leader LLM can follow
+// it mechanically: STALLED ⇒ record `action` and re-dispatch; PROGRESSING ⇒
+// record `no_action`. English by convention (see squadHeartbeatFallbackNote).
+func heartbeatHandoffNote(t squadHeartbeatTelemetry, now time.Time) string {
+	lastActivity := "no member task has ever touched this issue"
+	if t.lastMemberTaskActivityAt.Valid {
+		lastActivity = "last member-task activity was " + ago(now.Sub(t.lastMemberTaskActivityAt.Time)) + " ago"
+	}
+	running := fmt.Sprintf("%d member task(s) currently running on this issue/sub-issues", t.runningMemberTasks)
+
+	if t.stalled(now) {
+		return "Squad heartbeat telemetry for this issue:\n" +
+			"- " + running + "\n" +
+			"- " + lastActivity + "\n" +
+			"Verdict: STALLED. No member is currently working and there is no recent member activity while the issue is still open. " +
+			"You MUST re-dispatch the next step to a suitable member now — post an @mention delegation OR create a `todo` child issue assigned to a member — and record outcome `action`. " +
+			"Do NOT record `no_action` and do NOT claim members are still working: the task queue above proves they are not. " +
+			"If the work is genuinely complete, close the issue instead of recording no_action."
+	}
+	return "Squad heartbeat telemetry for this issue:\n" +
+		"- " + running + "\n" +
+		"- " + lastActivity + "\n" +
+		"Verdict: PROGRESSING. The squad is genuinely active. Record outcome `no_action` and exit, " +
+		"unless you spot a concrete next step that genuinely needs a new dispatch (in which case record `action`)."
+}
+
+// ago formats a duration as a short human-readable relative string for the
+// handoff note (e.g. "3h12m", "47m", "25s"). Coarse is fine — it is telemetry
+// for the leader, not an audit value.
+func ago(d time.Duration) string {
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+}
 
 // squadHeartbeatStore is the narrow read contract the heartbeat inspector
 // needs from the DB layer. *db.Queries satisfies it structurally. Defined here
@@ -34,6 +113,7 @@ const squadHeartbeatFollowupReason = "Squad heartbeat: periodic check-in. Do NOT
 type squadHeartbeatStore interface {
 	ListSquadHeartbeatDueIssues(ctx context.Context) ([]db.ListSquadHeartbeatDueIssuesRow, error)
 	GetIssue(ctx context.Context, id pgtype.UUID) (db.Issue, error)
+	GetSquadHeartbeatMemberActivity(ctx context.Context, arg db.GetSquadHeartbeatMemberActivityParams) (db.GetSquadHeartbeatMemberActivityRow, error)
 }
 
 // SquadHeartbeatInspectJob returns the JobSpec that periodically re-inspects
@@ -79,6 +159,11 @@ func makeSquadHeartbeatInspectHandler(queries squadHeartbeatStore, follower Squa
 		}
 
 		woken := 0
+		stalled := 0
+		progressing := 0
+		// Single "now" for the tick so all issues in this run share one
+		// stall threshold baseline; avoids per-issue clock jitter.
+		now := time.Now()
 		for _, row := range rows {
 			// The issue may have been closed between the candidate scan and
 			// now; skip missing rows rather than failing the whole tick.
@@ -93,10 +178,43 @@ func makeSquadHeartbeatInspectHandler(queries squadHeartbeatStore, follower Squa
 					"error", err)
 				continue
 			}
+
+			// Build a data-driven handoff note. The verdict (STALLED vs
+			// PROGRESSING) is computed here from the task queue, not left to
+			// the leader LLM — this is the fix for false no_action on idle
+			// squads. A telemetry failure degrades to the fallback note but
+			// still wakes the leader.
+			note := squadHeartbeatFallbackNote
+			activity, terr := queries.GetSquadHeartbeatMemberActivity(ctx, db.GetSquadHeartbeatMemberActivityParams{
+				IssueID:  row.IssueID,
+				LeaderID: row.LeaderID,
+			})
+			if terr != nil {
+				// Fallback (no telemetry) is counted as stalled-unknown so the
+				// counters stay honest: we did NOT prove progress.
+				stalled++
+				slog.Warn("squad heartbeat: member-activity telemetry failed; using fallback note",
+					"squad_id", util.UUIDToString(row.SquadID),
+					"issue_id", util.UUIDToString(row.IssueID),
+					"error", terr)
+			} else {
+				tel := squadHeartbeatTelemetry{
+					runningMemberTasks:       activity.RunningMemberTasks,
+					lastMemberTaskActivityAt: activity.LastMemberTaskActivityAt,
+					heartbeatInterval:        time.Duration(row.HeartbeatIntervalMinutes) * time.Minute,
+				}
+				if tel.stalled(now) {
+					stalled++
+				} else {
+					progressing++
+				}
+				note = heartbeatHandoffNote(tel, now)
+			}
+
 			// Pass an invalid triggering agent: the heartbeat is a scheduler
 			// tick, not a member action, so the self-trigger guard inside
 			// EnqueueSquadLeaderFollowUp must not reject this wake-up.
-			ok, ferr := follower.EnqueueSquadLeaderFollowUp(ctx, issue, pgtype.UUID{}, squadHeartbeatFollowupReason)
+			ok, ferr := follower.EnqueueSquadLeaderFollowUp(ctx, issue, pgtype.UUID{}, note)
 			if ferr != nil {
 				slog.Warn("squad heartbeat: leader follow-up failed",
 					"squad_id", util.UUIDToString(row.SquadID),
@@ -116,8 +234,10 @@ func makeSquadHeartbeatInspectHandler(queries squadHeartbeatStore, follower Squa
 		return HandlerResult{
 			RowsAffected: int64(woken),
 			Result: map[string]any{
-				"candidates": len(rows),
-				"woken":      woken,
+				"candidates":  len(rows),
+				"woken":       woken,
+				"stalled":     stalled,
+				"progressing": progressing,
 			},
 		}, nil
 	}

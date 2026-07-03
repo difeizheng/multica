@@ -107,7 +107,10 @@ SELECT
     s.id            AS squad_id,
     s.leader_id     AS leader_id,
     i.id            AS issue_id,
-    i.workspace_id  AS workspace_id
+    i.workspace_id  AS workspace_id,
+    -- Carried into the heartbeat handler so it can compute the stall
+    -- threshold (now - last_member_activity) without a second squad lookup.
+    s.heartbeat_interval_minutes AS heartbeat_interval_minutes
 FROM squad s
 JOIN issue i
        ON i.assignee_type = 'squad'
@@ -132,3 +135,37 @@ WHERE s.archived_at IS NULL
         AND lt.agent_id = s.leader_id
         AND lt.status IN ('queued', 'dispatched')
   );
+
+-- name: GetSquadHeartbeatMemberActivity :one
+-- Per-issue member-task telemetry for the periodic heartbeat. Returns one
+-- synthetic row even when no member task exists. The heartbeat handler uses
+-- this to classify the issue as STALLED vs PROGRESSING deterministically,
+-- instead of leaving that judgement to the leader LLM (which has no
+-- task-queue visibility and defaults to "still working" from the in_progress
+-- label alone).
+--
+-- Columns:
+--   running_member_tasks          — non-leader tasks on this issue OR its
+--                                   direct children currently queued/dispatched
+--                                   (i.e. a member is actively working right now).
+--   last_member_task_activity_at  — most recent point any non-leader member
+--                                   task on the subtree was known alive:
+--                                   completion time if finished, else start,
+--                                   else creation. NULL when no non-leader
+--                                   member task has ever touched the subtree.
+--
+-- Leader's own tasks are excluded so leader coordination runs never read as
+-- "member progress". Children are included because the protocol allows
+-- dispatch via a todo child issue assigned to a member.
+SELECT
+    COUNT(*) FILTER (
+        WHERE t.status IN ('queued', 'dispatched')
+          AND t.agent_id <> @leader_id
+    )::int AS running_member_tasks,
+    -- Explicit cast so sqlc emits pgtype.Timestamptz (nullable) instead of
+    -- an opaque interface{} for the MAX(...) FILTER aggregate.
+    (MAX(COALESCE(t.completed_at, t.started_at, t.created_at))
+        FILTER (WHERE t.agent_id <> @leader_id))::timestamptz AS last_member_task_activity_at
+FROM agent_task_queue t
+WHERE t.issue_id = @issue_id
+   OR t.issue_id IN (SELECT id FROM issue WHERE parent_issue_id = @issue_id);

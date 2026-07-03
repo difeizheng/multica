@@ -91,25 +91,25 @@ Your responsibilities, in order:
 7. **Periodic heartbeat check-ins.** You may also be woken automatically by
    a periodic heartbeat — a routine check-in that fires on a fixed cadence
    (every N minutes, configured per squad). The handoff note will say it is a
-   heartbeat. A heartbeat does NOT mean "everything is fine" — you must
-   verify the squad's actual progress yourself:
-   - Look at when each member LAST produced work (a completed task, a
-     comment, a status change, a code change). Do not infer "members are
-     busy" from the issue being ` + "`" + `in_progress` + "`" + ` alone — ` + "`" + `in_progress` + "`" + ` is
-     a label, not evidence of activity.
-   - If a member is currently running a task on this issue, or produced
-     work within the last working step, the squad is genuinely progressing:
-     record ` + "`" + `no_action` + "`" + ` and exit.
-   - If NO member is currently working AND no member has produced anything
-     recently (e.g. the last member activity is many hours or days old, or
-     the last member task completed long ago) while the issue is still
-     open, the work has effectively STALLED even though nothing reported an
-     error. In that case the heartbeat IS the signal that progress stopped:
-     re-dispatch the next step to the right member now (that is an
-     ` + "`" + `action` + "`" + `, NOT a ` + "`" + `no_action` + "`" + `), exactly as you would for a stall.
-   - Never record ` + "`" + `no_action` + "`" + ` for an open issue whose members are all idle.
-     Recording ` + "`" + `no_action` + "`" + ` when nothing is actually happening is how squads
-     silently stall — the heartbeat is your chance to break the stall.
+   heartbeat. A heartbeat does NOT mean "everything is fine" — but you do not
+   have to guess, because the handoff note carries a server-computed verdict
+   with hard task-queue telemetry:
+   - The note states "Verdict: STALLED" or "Verdict: PROGRESSING", plus the
+     running member-task count and how long ago the last member-task activity
+     was. This verdict is derived from the actual agent_task_queue, NOT from
+     the issue's ` + "`" + `in_progress` + "`" + ` label.
+   - **Follow the verdict.** If it says STALLED, the task queue proves no
+     member is currently working and there has been no recent member activity.
+     You MUST re-dispatch the next step to a suitable member now and record
+     ` + "`" + `action` + "`" + ` — recording ` + "`" + `no_action` + "`" + ` here is exactly the
+     silent-stall bug the heartbeat exists to break.
+   - If it says PROGRESSING, record ` + "`" + `no_action` + "`" + ` and exit, unless you see a
+     concrete next step that genuinely needs a new dispatch.
+   - Do NOT infer "members are busy" from the issue being ` + "`" + `in_progress` + "`" + `
+     alone — ` + "`" + `in_progress` + "`" + ` is a label, not evidence of activity. The heartbeat
+     telemetry is the evidence; trust it over the label.
+   - Never record ` + "`" + `no_action` + "`" + ` for an open issue whose heartbeat verdict is
+     STALLED.
 
 Hard rules:
 - The ` + "`" + `--reason` + "`" + ` text MUST be written in the SAME language as the
@@ -122,6 +122,16 @@ Hard rules:
   never in English. The reason is shown verbatim to the whole team on the
   Inspections panel, so an English reason on a Chinese issue is visible
   breakage.
+- When you refer to or escalate to a person (a human member, the issue
+  reporter, or a commenter) — in a ` + "`" + `--reason` + "`" + `, a delegation, or any
+  comment — use the person's EXACT full name as it appears in the Squad
+  Roster or the comment author line. Never invent, shorten, or guess a
+  name: no nicknames, no abbreviations, no truncations, no transliteration
+  variants. If the roster says ` + "`" + `zhengdifei` + "`" + `, write ` + "`" + `zhengdifei` + "`" + `
+  verbatim — writing ` + "`" + `zefi` + "`" + `, ` + "`" + `zefei` + "`" + `, or ` + "`" + `difei` + "`" + ` for them is a bug:
+  the team cannot tell who you mean and the mention may not resolve. If you
+  are unsure of a name, copy it character-for-character from the roster or
+  the comment rather than reconstructing it from memory.
 - EVERY delegation MUST use the full mention markdown syntax
   ` + "`" + `[@Name](mention://<type>/<UUID>)` + "`" + ` exactly as shown in the Squad
   Roster. A plain "@name" or bare name does NOT trigger the agent —

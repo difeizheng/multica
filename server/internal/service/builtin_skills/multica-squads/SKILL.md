@@ -212,12 +212,15 @@ background schedulers:
   issue whose last `squad_leader_evaluated` activity is older than the squad's
   configured `heartbeat_interval_minutes` (default 30, configurable on the
   squad Inspections panel, range 5–1440 minutes), as long as the leader has no
-  queued/dispatched task. The leader verifies actual member progress: if a
-  member is currently working, it records `no_action`; if no member is working
-  and the issue is still open (members idle), it treats that as a stall and
-  re-dispatches the next step (`action`). The heartbeat is how a squad breaks
-  out of a silent stall where members finished or went idle without the issue
-  moving forward.
+  queued/dispatched task. **The server computes a STALLED vs PROGRESSING
+  verdict from the actual task queue** — running member-task count on the
+  issue/sub-issues and how long ago the last member-task activity was — and
+  embeds it (with the raw telemetry) in the leader's handoff note. The leader
+  follows that verdict: PROGRESSING ⇒ `no_action`; STALLED ⇒ re-dispatch the
+  next step (`action`). This is how a squad breaks out of a silent stall where
+  members finished or went idle without the issue moving forward — the leader
+  no longer has to guess "is anyone working?" from the `in_progress` label,
+  which previously produced false `no_action` on idle squads.
 
 Both paths enqueue via the same deduped leader-follow-up entry point, so a
 race between them cannot produce a duplicate wake-up.
