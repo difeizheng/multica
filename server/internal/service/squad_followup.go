@@ -64,7 +64,7 @@ func (s *TaskService) EnqueueSquadLeaderFollowUp(ctx context.Context, issue db.I
 		return false, nil
 	}
 
-	if _, err := s.EnqueueTaskForSquadLeaderWithHandoff(ctx, issue, squad.LeaderID, reason); err != nil {
+	if _, err := s.EnqueueTaskForSquadLeaderWithHandoff(ctx, issue, squad.LeaderID, squad.ID, reason, pgtype.UUID{}); err != nil {
 		return false, fmt.Errorf("enqueue squad leader follow-up: %w", err)
 	}
 	slog.Info("squad leader follow-up enqueued",
